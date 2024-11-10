@@ -32,6 +32,12 @@ impl Default for AttentionConfig {
     }
 }
 
+impl AttentionConfig {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> Attention<B> {
+        Attention::new(device, self.clone())
+    }
+}
+
 
 #[derive(Module, Debug)]
 pub struct Attention<B: Backend> {
