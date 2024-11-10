@@ -1,0 +1,101 @@
+[package]
+name = "burn_dinov2"
+description = "burn dinov2 model inference and training"
+version = "0.1.0"
+edition = "2021"
+authors = ["mosure <mitchell@mosure.me>"]
+license = "MIT OR Apache-2.0"
+keywords = [
+  "burn",
+  "dinov2",
+  "vit",
+]
+categories = [
+  "computer-vision",
+]
+homepage = "https://github.com/mosure/burn_dinov2"
+repository = "https://github.com/mosure/burn_dinov2"
+readme = "README.md"
+exclude = [
+  ".devcontainer",
+  ".github",
+  "docs",
+  "dist",
+  "build",
+  "assets",
+  "credits",
+]
+
+[dependencies.burn]
+version = "0.15"
+features = [
+  "autodiff",
+  "autotune",
+  "dataset",
+  "fusion",
+  "metrics",
+  "train",
+  "tui",
+  "wgpu",
+]
+
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+wasm-bindgen = "0.2"
+
+
+[dev-dependencies.bevy]
+version = "0.14"
+default-features = false
+features = [
+  "bevy_asset",
+  "bevy_core_pipeline",
+  "bevy_render",
+  "bevy_winit",
+  "x11",
+]
+
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  'Document',
+  'Element',
+  'HtmlElement',
+  'Location',
+  'Node',
+  'Window',
+]
+
+
+[dev-dependencies]
+bevy_args = "1.6"
+criterion = { version = "0.5", features = ["html_reports"] }
+futures-intrusive = { version = "0.5.0" }
+pollster = { version = "0.4.0" }
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+
+
+[lib]
+path = "src/lib.rs"
+
+[[example]]
+name = "forward"
+path = "examples/forward.rs"
