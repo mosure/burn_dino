@@ -17,15 +17,31 @@ use crate::layers::{
 
 
 #[derive(Config)]
-struct TransformerBlockConfig {
-    attn: AttentionConfig,
-    layer_scale: Option<LayerScaleConfig>,
-    mlp_ratio: f32,
+pub struct BlockConfig {
+    pub attn: AttentionConfig,
+    pub layer_scale: Option<LayerScaleConfig>,
+    pub mlp_ratio: f32,
+}
+
+impl Default for BlockConfig {
+    fn default() -> Self {
+        Self {
+            attn: AttentionConfig::default(),
+            layer_scale: None,
+            mlp_ratio: 4.0,
+        }
+    }
+}
+
+impl BlockConfig {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> Block<B> {
+        Block::new(device, self.clone())
+    }
 }
 
 
 #[derive(Module, Debug)]
-struct TransformerBlock<B: Backend> {
+pub struct Block<B: Backend> {
     norm1: nn::LayerNorm<B>,
     attention: Attention<B>,
     ls1: Option<LayerScale<B, 3>>,
@@ -37,10 +53,10 @@ struct TransformerBlock<B: Backend> {
     // TODO: drop_path_2
 }
 
-impl<B: Backend> TransformerBlock<B> {
+impl<B: Backend> Block<B> {
     pub fn new(
         device: &B::Device,
-        config: TransformerBlockConfig,
+        config: BlockConfig,
     ) -> Self {
         let norm1 = nn::LayerNormConfig::new(config.attn.dim).init(device);
         let attention = config.attn.init(device);
