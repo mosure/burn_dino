@@ -1,12 +1,9 @@
-use std::ops::RangeFull;
-
 use burn::{
     prelude::*,
     nn::Gelu,
 };
 
 use crate::layers::{
-    attention::AttentionConfig,
     block::{
         Block,
         BlockConfig,
@@ -19,18 +16,17 @@ use crate::layers::{
 
 
 #[derive(Config)]
-struct DinoVisionTransformerConfig {
-    image_size: usize,
-    patch_size: usize,
-    input_channels: usize,
-    embedding_dimension: usize,
-    depth: usize,
-    block_config: BlockConfig,
-    positional_encoding_interpolate: nn::interpolate::Interpolate2dConfig,
+pub struct DinoVisionTransformerConfig {
+    pub image_size: usize,
+    pub patch_size: usize,
+    pub input_channels: usize,
+    pub embedding_dimension: usize,
+    pub depth: usize,
+    pub block_config: BlockConfig,
+    pub positional_encoding_interpolate: nn::interpolate::Interpolate2dConfig,
 }
 
 impl Default for DinoVisionTransformerConfig {
-    // TODO: no default, only provide small, base, large, giant configurations
     fn default() -> Self {
         let image_size = 224;
         let patch_size = 16;
@@ -58,22 +54,47 @@ impl DinoVisionTransformerConfig {
         DinoVisionTransformer::new(device, self.clone())
     }
 
-    // TODO: small, base, large, giant configurations
+    pub fn vits() -> Self {
+        Self {
+            embedding_dimension: 384,
+            depth: 12,
+            ..Self::default()
+        }
+    }
+
+    pub fn vitb() -> Self {
+        Self::default()
+    }
+
+    pub fn vitl() -> Self {
+        Self {
+            embedding_dimension: 1024,
+            depth: 12,
+            ..Self::default()
+        }
+    }
+
+    pub fn vitg() -> Self {
+        Self {
+            embedding_dimension: 1536,
+            depth: 12,
+            ..Self::default()
+        }
+    }
 }
 
 
 #[derive(Debug, Clone)]
-struct DinoOutput<B: Backend> {
+pub struct DinoOutput<B: Backend> {
     pub x_norm_clstoken: Tensor<B, 2>,
-    pub x_norm_regtokens: Tensor<B, 3>,
     pub x_norm_patchtokens: Tensor<B, 3>,
     pub x_prenorm: Tensor<B, 3>,
-    pub masks: Option<Tensor<B, 3>>,
+    pub masks: Option<Tensor<B, 3, Bool>>,
 }
 
 
 #[derive(Module, Debug)]
-struct DinoVisionTransformer<B: Backend> {
+pub struct DinoVisionTransformer<B: Backend> {
     activation: Gelu,
     cls_token: Tensor<B, 3>,
     pos_embed: Tensor<B, 3>,
@@ -82,6 +103,7 @@ struct DinoVisionTransformer<B: Backend> {
     patch_embed: PatchEmbed<B>,
     layer_norm: nn::LayerNorm<B>,
     blocks: Vec<Block<B>>,
+    patch_size: usize,
 }
 
 impl<B: Backend> DinoVisionTransformer<B> {
@@ -90,6 +112,16 @@ impl<B: Backend> DinoVisionTransformer<B> {
         config: DinoVisionTransformerConfig,
     ) -> Self {
         // TODO: initialize cls_token and pos_embed
+        // trunc_normal_(self.pos_embed, std=0.02)
+        // nn.init.normal_(self.cls_token, std=1e-6)
+        // if self.register_tokens is not None:
+        //     nn.init.normal_(self.register_tokens, std=1e-6)
+        // named_apply(init_weights_vit_timm, self)
+        // if isinstance(module, nn.Linear):
+        // trunc_normal_(module.weight, std=0.02)
+        // if module.bias is not None:
+        //     nn.init.zeros_(module.bias)
+
         let cls_token: Tensor<B, 3> = Tensor::zeros(
             [1, 1, config.embedding_dimension],
             device,
@@ -135,6 +167,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             patch_embed,
             layer_norm,
             blocks,
+            patch_size: config.patch_size,
         }
     }
 
@@ -152,11 +185,12 @@ impl<B: Backend> DinoVisionTransformer<B> {
             return self.pos_embed.clone();
         }
 
-        let class_pos_embed = self.pos_embed.clone().slice([RangeFull, 0..1]);
-        let patch_pos_embed = self.pos_embed.clone().slice([RangeFull, 1..]);
+        let b_dim = self.pos_embed.shape().dims[0];
+        let n_dim = self.pos_embed.shape().dims[1];
+
+        let class_pos_embed = self.pos_embed.clone().slice([0..b_dim, 0..1]);
+        let patch_pos_embed = self.pos_embed.clone().slice([0..b_dim, 1..n_dim]);
         let dim = x.shape().dims[2];
-        let w0 = W / self.patch_size;
-        let h0 = H / self.patch_size;
         let M = N.isqrt();
 
         assert!(
@@ -166,7 +200,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
 
         let patch_pos_embed = self.interpolate.forward(
             patch_pos_embed.reshape([1, M, M, dim]).permute([0, 3, 1, 2]),
-        ).permute([0, 2, 3, 1]).reshape([1, -1, dim]);
+        ).permute([0, 2, 3, 1]).reshape([1_i32, -1, dim as i32]);
 
         return Tensor::cat(
             vec![
@@ -184,24 +218,60 @@ impl<B: Backend> DinoVisionTransformer<B> {
         mask: Option<Tensor<B, 3, Bool>>,
     ) -> Tensor<B, 3> {
         // TODO: H, W?
-        let [B, C, W, H] = x.shape().dims();
+        let [_B, _C, W, H] = x.shape().dims();
 
-        // let x = self.patch_embed.forward(x);
+        let x = self.patch_embed.forward(x);
 
         let x = if let Some(mask) = mask {
-            x.mask_where(mask, self.mask_token)
+            x.mask_where(mask, self.mask_token.clone().unsqueeze_dim(0))
         } else {
             x
         };
 
         let x = Tensor::cat(
-            &[self.cls_token.expand([x.shape().dims[0], -1, -1]), x],
+            vec![self.cls_token.clone().expand([x.shape().dims[0] as i64, -1, -1]), x],
             1
         );
 
-        let x = x + self.interpolate_pos_encoding(x, W, H);
+        let residual = self.interpolate_pos_encoding(x.clone(), W, H);
+        let x = x + residual;
 
         x
+    }
+
+    #[allow(non_snake_case)]
+    pub fn intermediate_layers(
+        &self,
+        x: Tensor<B, 4>,
+        layers: &[usize],
+    ) -> (
+        Vec<Tensor<B, 2>>,
+        Vec<Tensor<B, 4>>,
+    ) {
+        let mut x = self.prepare_tokens_with_masks(x, None);
+
+        let mut class_tokens = Vec::with_capacity(layers.len());
+        let mut output = Vec::with_capacity(layers.len());
+
+        for (i, block) in self.blocks.iter().enumerate() {
+            x = block.forward(x);
+
+            if layers.contains(&i) {
+                let x = self.layer_norm.forward(x.clone());
+
+                let class_token: Tensor<B, 2> = x.clone().slice([0..x.shape().dims[0], 0..1]).squeeze(1);
+                let out = x.clone().slice([0..x.shape().dims[0], 1..x.shape().dims[1]]);
+
+                let [B, _, W, H] = x.shape().dims();
+                let reshaped = out.reshape([B as i32, (W / self.patch_size) as i32, (H / self.patch_size) as i32, -1])
+                    .permute([0, 3, 1, 2]);
+
+                class_tokens.push(class_token);
+                output.push(reshaped);
+            }
+        }
+
+        (class_tokens, output)
     }
 
     pub fn forward(
@@ -209,20 +279,25 @@ impl<B: Backend> DinoVisionTransformer<B> {
         x: Tensor<B, 4>,
         masks: Option<Tensor<B, 3, Bool>>,
     ) -> DinoOutput<B> {
-        let mut x = self.prepare_tokens_with_masks(x, masks);
+        let mut x = self.prepare_tokens_with_masks(x, masks.clone());
 
         for block in &self.blocks {
             x = block.forward(x);
         }
 
-        let x = self.layer_norm.forward(x);
+        let x_norm = self.layer_norm.forward(x.clone());
+
+        let b_dim = x.shape().dims[0];
+        let n_dim = x.shape().dims[1];
+
+        let x_norm_clstoken = x_norm.clone().slice([0..b_dim, 0..1]).squeeze(1);
+        let x_norm_patchtokens = x_norm.clone().slice([0..b_dim, 1..n_dim]);
 
         DinoOutput {
-            x_norm_clstoken: Tensor::zeros([1, 1, 1], x.device()),
-            x_norm_regtokens: Tensor::zeros([1, 1, 1], x.device()),
-            x_norm_patchtokens: Tensor::zeros([1, 1, 1], x.device()),
-            x_prenorm: Tensor::zeros([1, 1, 1], x.device()),
-            masks: None,
+            x_norm_clstoken,
+            x_norm_patchtokens,
+            x_prenorm: x,
+            masks: masks.into(),
         }
     }
 }
