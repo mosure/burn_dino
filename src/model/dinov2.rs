@@ -4,6 +4,7 @@ use burn::{
 };
 
 use crate::layers::{
+    attention::AttentionConfig,
     block::{
         Block,
         BlockConfig,
@@ -39,7 +40,13 @@ impl Default for DinoVisionTransformerConfig {
             input_channels: 3,
             embedding_dimension: 768,
             depth: 12,
-            block_config: BlockConfig::default(),
+            block_config: BlockConfig {
+                attn: AttentionConfig {
+                    dim: 768,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             positional_encoding_interpolate: nn::interpolate::Interpolate2dConfig {
                 mode: nn::interpolate::InterpolateMode::Cubic,
                 output_size: interpolate_size.into(),
@@ -55,9 +62,17 @@ impl DinoVisionTransformerConfig {
     }
 
     pub fn vits() -> Self {
+        let embedding_dimension = 384;
         Self {
-            embedding_dimension: 384,
-            depth: 12,
+            embedding_dimension,
+            block_config: BlockConfig {
+                attn: AttentionConfig {
+                    dim: embedding_dimension,
+                    num_heads: 6,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..Self::default()
         }
     }
@@ -67,17 +82,35 @@ impl DinoVisionTransformerConfig {
     }
 
     pub fn vitl() -> Self {
+        let embedding_dimension = 1024;
         Self {
-            embedding_dimension: 1024,
-            depth: 12,
+            embedding_dimension,
+            depth: 24,
+            block_config: BlockConfig {
+                attn: AttentionConfig {
+                    dim: embedding_dimension,
+                    num_heads: 16,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..Self::default()
         }
     }
 
     pub fn vitg() -> Self {
+        let embedding_dimension = 1536;
         Self {
-            embedding_dimension: 1536,
-            depth: 12,
+            embedding_dimension,
+            depth: 40,
+            block_config: BlockConfig {
+                attn: AttentionConfig {
+                    dim: embedding_dimension,
+                    num_heads: 24,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             ..Self::default()
         }
     }
@@ -187,9 +220,10 @@ impl<B: Backend> DinoVisionTransformer<B> {
 
         let b_dim = self.pos_embed.shape().dims[0];
         let n_dim = self.pos_embed.shape().dims[1];
+        let c_dim = self.pos_embed.shape().dims[2];
 
-        let class_pos_embed = self.pos_embed.clone().slice([0..b_dim, 0..1]);
-        let patch_pos_embed = self.pos_embed.clone().slice([0..b_dim, 1..n_dim]);
+        let class_pos_embed: Tensor<B, 2> = self.pos_embed.clone().slice([0..b_dim, 0..1, 0..c_dim]).squeeze(1);
+        let patch_pos_embed = self.pos_embed.clone().slice([0..b_dim, 1..n_dim, 0..c_dim]);
         let dim = x.shape().dims[2];
         let M = N.isqrt();
 

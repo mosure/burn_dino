@@ -21,9 +21,9 @@ pub struct AttentionConfig {
 impl Default for AttentionConfig {
     fn default() -> Self {
         Self {
-            dim: 0,
-            num_heads: 8,
-            qkv_bias: false,
+            dim: 768,
+            num_heads: 12,
+            qkv_bias: true,
             proj_bias: true,
             attn_drop: 0.0,
             proj_drop: 0.0,

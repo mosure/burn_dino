@@ -26,6 +26,9 @@ exclude = [
   "credits",
 ]
 
+[dependencies]
+burn-import = "0.15"
+
 [dependencies.burn]
 version = "0.15"
 features = [
@@ -34,6 +37,8 @@ features = [
   "dataset",
   "fusion",
   "metrics",
+  "ndarray",
+  "network",
   "train",
   "tui",
   "wgpu",
@@ -96,6 +101,15 @@ codegen-units = 1
 [lib]
 path = "src/lib.rs"
 
+# [[bin]]
+# name = "import"
+# path = "tool/import.rs"
+
 [[example]]
 name = "forward"
-path = "examples/forward.rs"
+path = "example/forward.rs"
+
+[[bench]]
+name = "dinov2"
+path = "tool/benchmark.rs"
+harness = false

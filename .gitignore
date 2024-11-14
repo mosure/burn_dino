@@ -16,3 +16,5 @@ Cargo.lock
 screenshots/
 headless_output/
 www/assets/
+
+assets/models/
