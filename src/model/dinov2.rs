@@ -134,7 +134,7 @@ pub struct DinoVisionTransformer<B: Backend> {
     mask_token: Tensor<B, 2>,
     interpolate: nn::interpolate::Interpolate2d,
     patch_embed: PatchEmbed<B>,
-    layer_norm: nn::LayerNorm<B>,
+    norm: nn::LayerNorm<B>,
     blocks: Vec<Block<B>>,
     patch_size: usize,
 }
@@ -182,7 +182,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             config.embedding_dimension,
         ).init(device);
 
-        let layer_norm = nn::LayerNormConfig::new(config.embedding_dimension)
+        let norm: nn::LayerNorm<_> = nn::LayerNormConfig::new(config.embedding_dimension)
             .init(device);
 
         let mut blocks = Vec::with_capacity(config.depth);
@@ -198,7 +198,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             mask_token,
             interpolate,
             patch_embed,
-            layer_norm,
+            norm,
             blocks,
             patch_size: config.patch_size,
         }
@@ -291,7 +291,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             x = block.forward(x);
 
             if layers.contains(&i) {
-                let x = self.layer_norm.forward(x.clone());
+                let x = self.norm.forward(x.clone());
 
                 let class_token: Tensor<B, 2> = x.clone().slice([0..x.shape().dims[0], 0..1]).squeeze(1);
                 let out = x.clone().slice([0..x.shape().dims[0], 1..x.shape().dims[1]]);
@@ -319,7 +319,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             x = block.forward(x);
         }
 
-        let x_norm = self.layer_norm.forward(x.clone());
+        let x_norm = self.norm.forward(x.clone());
 
         let b_dim = x.shape().dims[0];
         let n_dim = x.shape().dims[1];

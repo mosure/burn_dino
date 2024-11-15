@@ -43,7 +43,7 @@ impl BlockConfig {
 #[derive(Module, Debug)]
 pub struct Block<B: Backend> {
     norm1: nn::LayerNorm<B>,
-    attention: Attention<B>,
+    attn: Attention<B>,
     ls1: Option<LayerScale<B, 3>>,
     // TODO: drop_path_1
 
@@ -59,7 +59,7 @@ impl<B: Backend> Block<B> {
         config: BlockConfig,
     ) -> Self {
         let norm1 = nn::LayerNormConfig::new(config.attn.dim).init(device);
-        let attention = config.attn.init(device);
+        let attn = config.attn.init(device);
 
         // self.ls1 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         // self.drop_path1 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -77,7 +77,7 @@ impl<B: Backend> Block<B> {
 
         Self {
             norm1,
-            attention,
+            attn,
             ls1: None,
             norm2,
             mlp,
@@ -88,7 +88,7 @@ impl<B: Backend> Block<B> {
     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
         // TODO: implement train mode drop_path and `drop_add_residual_stochastic_depth` for sample_drop_ratio > 0.1
 
-        let residual = self.attention.forward(self.norm1.forward(x.clone()));
+        let residual = self.attn.forward(self.norm1.forward(x.clone()));
         let residual = if let Some(ls1) = &self.ls1 {
             ls1.forward(residual)
         } else {
