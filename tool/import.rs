@@ -1,25 +1,22 @@
-use burn::{module::Module, record::{FullPrecisionSettings, NamedMpkFileRecorder, Record, Recorder}};
+use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder, Recorder};
 use burn_import::pytorch::PyTorchFileRecorder;
 
-use burn_dinov2::model::dinov2::{
-    DinoVisionTransformer,
-    DinoVisionTransformerConfig,
-};
+use burn_dinov2::model::dinov2::DinoVisionTransformerRecord;
 
 type Backend = burn::backend::NdArray<f32>;
 
 
 fn main() {
-    let device: Backend = Default::default();
+    let device = Default::default();
 
-    let model = DinoVisionTransformerConfig::vits().init(&device);
+    let record: DinoVisionTransformerRecord<Backend> = PyTorchFileRecorder::<FullPrecisionSettings>::default()
+        .load(
+            "./assets/models/dinov2_vits14_pretrain.pth".into(),
+            &device,
+        )
+        .expect("failed to decode state");
 
-    let recorder = PyTorchFileRecorder::<FullPrecisionSettings>::default();
-    model.load_file(
-        "./assets/models/dinov2_vits14_pretrain.pth".into(),
-        &recorder,
-        &device,
-    );
+    // let model = DinoVisionTransformerConfig::vits().init(&device);
 
     let recorder = NamedMpkFileRecorder::<FullPrecisionSettings>::default();
     recorder

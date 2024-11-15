@@ -26,8 +26,10 @@ exclude = [
   "credits",
 ]
 
+
 [dependencies]
-burn-import = "0.15"
+burn-import = { version = "0.15", features = ["pytorch"] }
+
 
 [dependencies.burn]
 version = "0.15"
@@ -80,6 +82,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 futures-intrusive = { version = "0.5.0" }
 pollster = { version = "0.4.0" }
 
+
 [profile.dev.package."*"]
 opt-level = 3
 
@@ -101,9 +104,9 @@ codegen-units = 1
 [lib]
 path = "src/lib.rs"
 
-# [[bin]]
-# name = "import"
-# path = "tool/import.rs"
+[[bin]]
+name = "import"
+path = "tool/import.rs"
 
 [[example]]
 name = "forward"
