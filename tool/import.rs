@@ -64,7 +64,8 @@ fn main() {
     let weights_path = format!("./assets/models/{}", args.vit_type.weights_file());
     println!("loading weights from: {}", weights_path);
 
-    let load_args = LoadArgs::new(weights_path.into());
+    let load_args = LoadArgs::new(weights_path.into())
+        .with_debug_print();
     let record: DinoVisionTransformerRecord<Backend> = PyTorchFileRecorder::<FullPrecisionSettings>::default()
         .load(load_args, &device)
         .expect("failed to decode state");

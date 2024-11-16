@@ -23,10 +23,10 @@ criterion_main!(ladon_burn_benchmarks);
 
 fn inference_benchmark(c: &mut Criterion) {
     let configs = vec![
-        (DinoVisionTransformerConfig::vits(), "vits"),
-        (DinoVisionTransformerConfig::vitb(), "vitb"),
-        (DinoVisionTransformerConfig::vitl(), "vitl"),
-        (DinoVisionTransformerConfig::vitg(), "vitg"),
+        (DinoVisionTransformerConfig::vits(None, None), "vits"),
+        (DinoVisionTransformerConfig::vitb(None, None), "vitb"),
+        (DinoVisionTransformerConfig::vitl(None, None), "vitl"),
+        (DinoVisionTransformerConfig::vitg(None, None), "vitg"),
     ];
 
     let mut group = c.benchmark_group("burn_dinov2_inference");

@@ -27,10 +27,14 @@ pub struct DinoVisionTransformerConfig {
     pub positional_encoding_interpolate: nn::interpolate::Interpolate2dConfig,
 }
 
-impl Default for DinoVisionTransformerConfig {
-    fn default() -> Self {
-        let image_size = 224;
-        let patch_size = 16;
+impl DinoVisionTransformerConfig {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> DinoVisionTransformer<B> {
+        DinoVisionTransformer::new(device, self.clone())
+    }
+
+    pub fn from_size(image_size: Option<usize>, patch_size: Option<usize>) -> Self {
+        let image_size = image_size.unwrap_or(518);
+        let patch_size = patch_size.unwrap_or(14);
 
         let interpolate_size = [image_size / patch_size, image_size / patch_size];
 
@@ -54,14 +58,8 @@ impl Default for DinoVisionTransformerConfig {
             },
         }
     }
-}
 
-impl DinoVisionTransformerConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> DinoVisionTransformer<B> {
-        DinoVisionTransformer::new(device, self.clone())
-    }
-
-    pub fn vits() -> Self {
+    pub fn vits(image_size: Option<usize>, patch_size: Option<usize>) -> Self {
         let embedding_dimension = 384;
         Self {
             embedding_dimension,
@@ -73,15 +71,15 @@ impl DinoVisionTransformerConfig {
                 },
                 ..Default::default()
             },
-            ..Self::default()
+            ..Self::from_size(image_size, patch_size)
         }
     }
 
-    pub fn vitb() -> Self {
-        Self::default()
+    pub fn vitb(image_size: Option<usize>, patch_size: Option<usize>) -> Self {
+        Self::from_size(image_size, patch_size)
     }
 
-    pub fn vitl() -> Self {
+    pub fn vitl(image_size: Option<usize>, patch_size: Option<usize>) -> Self {
         let embedding_dimension = 1024;
         Self {
             embedding_dimension,
@@ -94,11 +92,11 @@ impl DinoVisionTransformerConfig {
                 },
                 ..Default::default()
             },
-            ..Self::default()
+            ..Self::from_size(image_size, patch_size)
         }
     }
 
-    pub fn vitg() -> Self {
+    pub fn vitg(image_size: Option<usize>, patch_size: Option<usize>) -> Self {
         let embedding_dimension = 1536;
         Self {
             embedding_dimension,
@@ -111,7 +109,7 @@ impl DinoVisionTransformerConfig {
                 },
                 ..Default::default()
             },
-            ..Self::default()
+            ..Self::from_size(image_size, patch_size)
         }
     }
 }

@@ -6,11 +6,9 @@ use burn::{
 use image::{
     load_from_memory_with_format,
     DynamicImage,
-    GenericImage,
     ImageFormat,
-    Luma,
-    Pixel,
 };
+use safetensors::tensor::SafeTensors;
 
 use burn_dinov2::model::dinov2::{
     DinoVisionTransformer,
@@ -19,7 +17,8 @@ use burn_dinov2::model::dinov2::{
 
 
 static STATE_ENCODED: &[u8] = include_bytes!("../assets/models/dinov2.mpk");
-static INPUT_IMAGE_BYTES: &[u8] = include_bytes!("../assets/images/dino.png");
+static INPUT_IMAGE_0: &[u8] = include_bytes!("../assets/images/dino_0.png");
+static STANDARD_OUTPUT: &[u8] = include_bytes!("../assets/tensors/dino_0_small.st");
 
 
 pub fn load_model<B: Backend>(
@@ -50,10 +49,11 @@ fn normalize<B: Backend>(
 }
 
 pub fn load_image<B: Backend>(
+    bytes: &[u8],
     config: &DinoVisionTransformerConfig,
     device: &B::Device,
 ) -> Tensor<B, 4> {
-    let img = load_from_memory_with_format(INPUT_IMAGE_BYTES, ImageFormat::Png)
+    let img = load_from_memory_with_format(bytes, ImageFormat::Png)
         .unwrap()
         .resize_exact(config.image_size as u32, config.image_size as u32, image::imageops::FilterType::Lanczos3);
 
@@ -80,39 +80,41 @@ pub fn load_image<B: Backend>(
 
 fn main() {
     let device = Default::default();
-    let config = DinoVisionTransformerConfig::vits();
+    let config = DinoVisionTransformerConfig {
+        ..DinoVisionTransformerConfig::vits(None, None)
+    };
     let dino = load_model(&config, &device);
 
-    let input: Tensor<Wgpu, 4> = load_image(&config, &device);
-    let output = dino.forward(input.clone(), None);
-    let output = output.x_norm_patchtokens;
+    let input_tensor: Tensor<Wgpu, 4> = load_image(INPUT_IMAGE_0, &config, &device);
+    let output = dino.forward(input_tensor, None).x_norm_patchtokens;
 
-    let batch = output.shape().dims[0];
-    let spatial_size = output.shape().dims[1].isqrt();
-    let features = output.shape().dims[2];
+    let min = output.clone().min();
+    let max = output.clone().max();
+    let mean = output.clone().mean();
+    println!("Min: {}, Max: {}, Mean: {}", min, max, mean);
 
-    let output = output
-        .reshape([
-            batch,
-            spatial_size,
-            spatial_size,
-            features,
-        ])
-        .mean_dim(3);
+    let output_flat: Vec<f32> = output.to_data().to_vec().unwrap();
 
-    println!("normalized patchtokens {:?}", output.shape());
+    let standard_output = SafeTensors::deserialize(STANDARD_OUTPUT)
+        .unwrap()
+        .tensor("output")
+        .unwrap();
 
-    let data: Vec<f32> = output.to_data().to_vec().unwrap();
-    let mut img = DynamicImage::new_luma8(spatial_size as u32, spatial_size as u32);
+    assert_eq!(output.shape().dims.as_slice(), standard_output.shape());
 
-    for (i, pixel) in data.iter().enumerate() {
-        let x = (i % spatial_size) as u32;
-        let y = (i / spatial_size) as u32;
-        let pixel_value = (pixel * 255.0).clamp(0.0, 255.0) as u8;
-        img.put_pixel(x, y, Luma([pixel_value]).to_rgba());
-    }
+    let standard_output_tensor: Vec<f32> = standard_output
+        .data()
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
 
-    img.save("output.png").unwrap();
+    let mae: f32 = output_flat
+        .iter()
+        .zip(standard_output_tensor.iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f32>() / output_flat.len() as f32;
 
-    println!("output saved to: {}", std::fs::canonicalize("output.png").unwrap().to_str().unwrap());
+    println!("Mean Absolute Error (MAE): {}", mae);
+
+    assert!(mae < 1e-4, "Output does not match Torch reference");
 }
