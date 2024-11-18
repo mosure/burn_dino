@@ -57,4 +57,3 @@ impl<B: Backend> PatchEmbed<B> {
             .swap_dims(1, 2)
     }
 }
-
