@@ -33,13 +33,8 @@ for image_path in images:
 input = torch.cat(inputs, dim=0)
 
 
-dinov2_vits14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14').cuda().eval()
-
-local_vits = DinoVisionTransformer(518, 14, 3, 384, depth=12, num_heads=6)
-local_vits.load_state_dict(dinov2_vits14.state_dict(), strict=True)
-local_vits.cuda().eval()
-
-output = local_vits.forward_features(input)['x_norm_patchtokens']
+dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').cuda().eval()
+output = dinov2_vitb14.forward_features(input)['x_norm_patchtokens']
 collapsed_output = output.reshape(-1, output.shape[-1])
 
 pca = PCA(n_components=3)
@@ -104,6 +99,6 @@ pca_features_rgb = pca_features_rgb.detach().cpu().numpy()
 
 for i in range(pca_features_rgb.shape[0]):
     image = transforms.ToPILImage()(pca_features_rgb[i])
-    image = image.resize((518, 518), resample=Image.LANCZOS)
+    image = image.resize((1024, 1024), resample=Image.LANCZOS)
 
     image.save(f'./assets/pca/dino_{i}_pca.png')
