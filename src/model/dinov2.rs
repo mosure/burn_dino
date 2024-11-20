@@ -13,6 +13,10 @@ use crate::layers::{
         Block,
         BlockConfig,
     },
+    layer_norm::{
+        LayerNorm,
+        LayerNormConfig,
+    },
     layer_scale::LayerScaleConfig,
     patch_embed::{
         PatchEmbed,
@@ -158,23 +162,6 @@ pub struct DinoOutput<B: Backend> {
     pub x_norm_patchtokens: Tensor<B, 3>,
     pub x_prenorm: Tensor<B, 3>,
     pub masks: Option<Tensor<B, 3, Bool>>,
-
-    // debug
-    pub input: Tensor<B, 4>,
-    pub patch_embed: Tensor<B, 3>,
-    pub interpolated_pos_encoding: Tensor<B, 3>,
-    pub patch_pos_embed_pre: Tensor<B, 3>,
-    pub patch_pos_embed_post: Tensor<B, 3>,
-    pub prepared_tokens: Tensor<B, 3>,
-    pub block_0: Tensor<B, 3>,
-    pub block_0_attn_residual: Tensor<B, 3>,
-    pub block_0_attn: Tensor<B, 3>,
-    pub block_0_attn_norm: Tensor<B, 3>,
-    pub block_0_attn_norm_weight: Tensor<B, 1>,
-    pub block_0_attn_norm_bias: Tensor<B, 1>,
-    pub block_0_mlp_residual: Tensor<B, 3>,
-    pub block_0_mlp: Tensor<B, 3>,
-    pub block_0_mlp_norm: Tensor<B, 3>,
 }
 
 
@@ -186,7 +173,7 @@ pub struct DinoVisionTransformer<B: Backend> {
     mask_token: Param<Tensor<B, 2>>,
     interpolate: nn::interpolate::Interpolate2d,
     patch_embed: PatchEmbed<B>,
-    norm: nn::LayerNorm<B>,
+    norm: LayerNorm<B>,
     blocks: Vec<Block<B>>,
     patch_size: usize,
 }
@@ -232,7 +219,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             config.embedding_dimension,
         ).init(device);
 
-        let norm: nn::LayerNorm<B> = nn::LayerNormConfig::new(config.embedding_dimension)
+        let norm: LayerNorm<B> = LayerNormConfig::new(config.embedding_dimension)
             .init(device);
 
         let mut blocks = Vec::with_capacity(config.depth);
@@ -260,16 +247,12 @@ impl<B: Backend> DinoVisionTransformer<B> {
         x: Tensor<B, 3>,
         W: usize,
         H: usize,
-    ) -> (
-        Tensor<B, 3>,
-        Tensor<B, 3>,
-        Tensor<B, 3>,
-     ) {
+    ) -> Tensor<B, 3> {
         let npatch = x.shape().dims[1] - 1;
         let N = self.pos_embed.shape().dims[1] - 1;
 
         if npatch == N && W == H {
-            return (self.pos_embed.val().clone(), self.pos_embed.val().clone(), self.pos_embed.val().clone());
+            return self.pos_embed.val().clone();
         }
 
         let b_dim = self.pos_embed.shape().dims[0];
@@ -286,24 +269,16 @@ impl<B: Backend> DinoVisionTransformer<B> {
             "number of patches should be a square number",
         );
 
-        let patch_pos_embed_pre = patch_pos_embed.clone();
-
         let patch_pos_embed = self.interpolate.forward(
             patch_pos_embed.reshape([1, M, M, dim]).permute([0, 3, 1, 2]),
         ).permute([0, 2, 3, 1]).reshape([1_i32, -1, dim as i32]);
 
-        let patch_pos_embed_post = patch_pos_embed.clone();
-
-        return (
-            Tensor::cat(
-                vec![
-                    class_pos_embed.unsqueeze_dim(0),
-                    patch_pos_embed,
-                ],
-                1,
-            ),
-            patch_pos_embed_pre,
-            patch_pos_embed_post,
+        return Tensor::cat(
+            vec![
+                class_pos_embed.unsqueeze_dim(0),
+                patch_pos_embed,
+            ],
+            1,
         );
     }
 
@@ -312,19 +287,11 @@ impl<B: Backend> DinoVisionTransformer<B> {
         &self,
         x: Tensor<B, 4>,
         mask: Option<Tensor<B, 3, Bool>>,
-    ) -> (
-        Tensor<B, 3>,
-        Tensor<B, 3>,
-        Tensor<B, 3>,
-        Tensor<B, 3>,
-        Tensor<B, 3>,
-    ) {
+    ) -> Tensor<B, 3> {
         // TODO: H, W?
         let [_B, _C, W, H] = x.shape().dims();
 
         let x = self.patch_embed.forward(x);
-        let patch_embed = x.clone();
-
         let x = if let Some(mask) = mask {
             x.mask_where(mask, self.mask_token.val().unsqueeze_dim(0))
         } else {
@@ -336,10 +303,10 @@ impl<B: Backend> DinoVisionTransformer<B> {
             1
         );
 
-        let (residual, patch_pos_embed_pre, patch_pos_embed_post) = self.interpolate_pos_encoding(x.clone(), W, H);
+        let residual = self.interpolate_pos_encoding(x.clone(), W, H);
         let x = x + residual.clone();
 
-        (x, patch_embed, residual, patch_pos_embed_pre, patch_pos_embed_post)
+        x
     }
 
     #[allow(non_snake_case)]
@@ -351,19 +318,13 @@ impl<B: Backend> DinoVisionTransformer<B> {
         Vec<Tensor<B, 2>>,
         Vec<Tensor<B, 4>>,
     ) {
-        let (
-            mut x,
-            _patch_embed,
-            _interpolated_pos_encoding,
-            _,
-            _,
-        ) = self.prepare_tokens_with_masks(x, None);
+        let mut x = self.prepare_tokens_with_masks(x, None);
 
         let mut class_tokens = Vec::with_capacity(layers.len());
         let mut output = Vec::with_capacity(layers.len());
 
         for (i, block) in self.blocks.iter().enumerate() {
-            (x, _, _, _, _, _, _, _, _) = block.forward(x);
+            x = block.forward(x);
 
             if layers.contains(&i) {
                 let x = self.norm.forward(x.clone());
@@ -388,31 +349,10 @@ impl<B: Backend> DinoVisionTransformer<B> {
         x: Tensor<B, 4>,
         masks: Option<Tensor<B, 3, Bool>>,
     ) -> DinoOutput<B> {
-        let input = x.clone();
-
-        let (
-            mut x,
-            patch_embed,
-            interpolated_pos_encoding,
-            patch_pos_embed_pre,
-            patch_pos_embed_post,
-        ) = self.prepare_tokens_with_masks(x, None);
-
-        let (
-            block_0,
-            block_0_attn_residual,
-            block_0_attn,
-            block_0_attn_norm,
-            block_0_attn_norm_bias,
-            block_0_attn_norm_weight,
-            block_0_mlp_residual,
-            block_0_mlp,
-            block_0_mlp_norm,
-        ) = self.blocks[0].forward(x.clone());
-        let prepared_tokens = x.clone();
+        let mut x = self.prepare_tokens_with_masks(x, None);
 
         for block in &self.blocks {
-            (x, _, _, _, _, _, _, _, _) = block.forward(x);
+            x = block.forward(x);
         }
 
         let x_norm = self.norm.forward(x.clone());
@@ -428,23 +368,6 @@ impl<B: Backend> DinoVisionTransformer<B> {
             x_norm_patchtokens,
             x_prenorm: x,
             masks: masks.into(),
-
-            // debug
-            input,
-            patch_embed,
-            interpolated_pos_encoding,
-            patch_pos_embed_pre,
-            patch_pos_embed_post,
-            prepared_tokens,
-            block_0,
-            block_0_attn_residual,
-            block_0_attn,
-            block_0_attn_norm,
-            block_0_attn_norm_weight,
-            block_0_attn_norm_bias,
-            block_0_mlp_residual,
-            block_0_mlp,
-            block_0_mlp_norm,
         }
     }
 }

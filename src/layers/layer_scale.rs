@@ -8,9 +8,6 @@ use burn::{
 #[derive(Config)]
 pub struct LayerScaleConfig {
     pub dim: usize,
-
-    #[config(default = "Initializer::Constant{value:1e-5}")]
-    pub initializer: Initializer,
 }
 
 impl Default for LayerScaleConfig {
@@ -36,7 +33,7 @@ impl<B: Backend, const D: usize> LayerScale<B, D> {
         device: &B::Device,
         config: &LayerScaleConfig,
     ) -> Self {
-        let gamma = config.initializer.init([config.dim], device);
+        let gamma = Initializer::Constant { value: 1e-5 }.init([config.dim], device);
 
         Self {
             gamma,

@@ -5,8 +5,6 @@ import torch
 from torch_pca import PCA
 from torchvision import transforms
 
-from dinov2.models.vision_transformer import DinoVisionTransformer
-
 transform = transforms.Compose([
     transforms.Resize(520, interpolation=transforms.InterpolationMode.LANCZOS),
     transforms.CenterCrop(518),
@@ -47,14 +45,13 @@ pca_features[:, 0] = (pca_features[:, 0] - pca_features[:, 0].min()) / \
                      (pca_features[:, 0].max() - pca_features[:, 0].min())
 
 
-# TODO: export pca_features for testing
-# TODO: export components and mean
 components = pca.components_
 mean = pca.mean_
 
 print('components:', components.shape)
 print('mean:', mean.shape)
 
+# TODO: export expected transform input shape
 save_file(
     {
         'components': components,

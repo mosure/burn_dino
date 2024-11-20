@@ -28,7 +28,7 @@ exclude = [
 
 
 [dependencies]
-bevy_args = "1.6"
+bevy_args = "1.6"  # TODO: support bevy decoupling
 burn-import = { version = "0.15", features = ["pytorch"] }
 clap = { version = "4.5", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
