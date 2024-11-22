@@ -18,6 +18,7 @@ burn dinov2 model 🔥
 - [x] all ViT configurations
 - [ ] training (loss + dropout)
 - [ ] optimized attention
+- [ ] automatic weights cache/download
 
 
 ## setup
@@ -25,14 +26,12 @@ burn dinov2 model 🔥
 - place in `./assets/models`
 - run import tool `cargo run --bin import`
 
+<!---
+TODO: release converted/quantized mpk models /w net loader
+-->
+
 
 ## benchmarks
 
 - `cargo bench`
 - open `target/criterion/report/index.html`
-
-
-## inference
-
-```rust
-```
