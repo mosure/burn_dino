@@ -1,12 +1,23 @@
-# burn_dinov2
-burn dinov2 model inference and training 🔥
+# burn_dino
+burn dinov2 model 🔥
 
 | input               | fg pca               |
 |-----------------------|-----------------------|
-| ![Alt text](./assets/images/dino_0.png)    | ![Alt text](./assets/pca/dino_0_pca.png)    |
-| ![Alt text](./assets/images/dino_1.png)    | ![Alt text](./assets/pca/dino_1_pca.png)    |
-| ![Alt text](./assets/images/dino_2.png)    | ![Alt text](./assets/pca/dino_2_pca.png)    |
-| ![Alt text](./assets/images/dino_3.png)    | ![Alt text](./assets/pca/dino_3_pca.png)    |
+| ![Alt text](./assets/images/dino_0.png)    | ![Alt text](./docs/images/dino_0_pca.png)    |
+| ![Alt text](./assets/images/dino_1.png)    | ![Alt text](./docs/images/dino_1_pca.png)    |
+| ![Alt text](./assets/images/dino_2.png)    | ![Alt text](./docs/images/dino_2_pca.png)    |
+| ![Alt text](./assets/images/dino_3.png)    | ![Alt text](./docs/images/dino_3_pca.png)    |
+
+`cargo run --example pca`
+
+
+## features
+
+- [x] inference
+- [x] pca transform layer
+- [x] all ViT configurations
+- [ ] training (loss + dropout)
+- [ ] optimized attention
 
 
 ## setup
@@ -17,7 +28,8 @@ burn dinov2 model inference and training 🔥
 
 ## benchmarks
 
-##### TODO: dinov2 benchmarks
+- `cargo bench`
+- open `target/criterion/report/index.html`
 
 
 ## inference

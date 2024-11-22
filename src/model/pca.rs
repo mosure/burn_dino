@@ -30,7 +30,7 @@ impl PcaTransformConfig {
 
 #[derive(Module, Debug)]
 pub struct PcaTransform<B: Backend> {
-    pub auxillary_features: Param<Tensor<B, 2>>,
+    // pub auxillary_features: Param<Tensor<B, 2>>,
     pub components: Param<Tensor<B, 2>>,
     pub mean: Param<Tensor<B, 2>>,
 }
@@ -40,24 +40,24 @@ impl<B: Backend> PcaTransform<B> {
         device: &B::Device,
         config: &PcaTransformConfig,
     ) -> Self {
-        let auxillary_features = config.initializer.init([config.batch_size - 1, config.input_dim], device);
+        // let auxillary_features = config.initializer.init([config.batch_size - 1, config.input_dim], device);
         let components = config.initializer.init([config.output_dim, config.input_dim], device);
         let mean = config.initializer.init([1, config.input_dim], device);
 
         Self {
-            auxillary_features,
+            // auxillary_features,
             components,
             mean,
         }
     }
 
     pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
-        let input_batch = Tensor::cat(
-            vec![x, self.auxillary_features.val()],
-            0,
-        );
+        // let input_batch = Tensor::cat(
+        //     vec![x, self.auxillary_features.val()],
+        //     0,
+        // );
 
-        let transformed = input_batch.matmul(self.components.val().transpose());
+        let transformed = x.matmul(self.components.val().transpose());
         transformed - self.mean.val().matmul(self.components.val().transpose())
 
         // TODO: remove the auxillary features

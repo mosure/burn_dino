@@ -10,7 +10,7 @@ use criterion::{
     Throughput,
 };
 
-use burn_dinov2::model::dinov2::DinoVisionTransformerConfig;
+use burn_dino::model::dino::DinoVisionTransformerConfig;
 
 
 criterion_group!{

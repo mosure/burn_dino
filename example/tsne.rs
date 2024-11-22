@@ -15,7 +15,7 @@ use image::{
 use bhtsne::tSNE;
 use ndarray::{Array2, Array4, ArrayBase, ArrayView2, Ix4, s, ViewRepr};
 
-use burn_dinov2::model::dinov2::{
+use burn_dino::model::dino::{
     DinoVisionTransformer,
     DinoVisionTransformerConfig,
 };

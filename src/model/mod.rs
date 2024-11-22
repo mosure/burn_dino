@@ -1,2 +1,2 @@
-pub mod dinov2;
+pub mod dino;
 pub mod pca;

@@ -2,8 +2,25 @@ import math
 from PIL import Image
 from safetensors.torch import save_file
 import torch
+import torch.nn as nn
 from torch_pca import PCA
 from torchvision import transforms
+
+
+class PcaModel(nn.Module):
+    def __init__(
+        self,
+        components,
+        mean,
+    ) -> None:
+        super().__init__()
+
+        self.components = nn.Parameter(components)
+        self.mean = nn.Parameter(mean)
+
+    def forward(self, x):
+        return x
+
 
 transform = transforms.Compose([
     transforms.Resize(520, interpolation=transforms.InterpolationMode.LANCZOS),
@@ -31,8 +48,8 @@ for image_path in images:
 input = torch.cat(inputs, dim=0)
 
 
-dinov2_vitb14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').cuda().eval()
-output = dinov2_vitb14.forward_features(input)['x_norm_patchtokens']
+dinov2_vits14 = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14').cuda().eval()
+output = dinov2_vits14.forward_features(input)['x_norm_patchtokens']
 collapsed_output = output.reshape(-1, output.shape[-1])
 
 pca = PCA(n_components=3)
@@ -41,8 +58,12 @@ pca_fg = PCA(n_components=3)
 pca.fit(collapsed_output)
 pca_features = pca.transform(collapsed_output)
 
-pca_features[:, 0] = (pca_features[:, 0] - pca_features[:, 0].min()) / \
-                     (pca_features[:, 0].max() - pca_features[:, 0].min())
+pca_features_pre_min_max = pca_features.clone()
+
+
+for i in range(3):
+    pca_features[:, i] = (pca_features[:, i] - pca_features[:, i].min()) / (pca_features[:, i].max() - pca_features[:, i].min())
+
 
 
 components = pca.components_
@@ -50,15 +71,22 @@ mean = pca.mean_
 
 print('components:', components.shape)
 print('mean:', mean.shape)
+print('pca_features:', pca_features.shape)
+print('pca_features_pre_min_max:', pca_features_pre_min_max.shape)
 
 # TODO: export expected transform input shape
 save_file(
     {
         'components': components,
+        'dino_output': collapsed_output,
+        'input': input,
         'mean': mean,
+        'pca_features': pca_features,
+        'pca_features_pre_min_max': pca_features_pre_min_max,
     },
     './assets/tensors/dino_pca.st',
 )
+torch.save(PcaModel(components, mean).state_dict(), './assets/models/dino_pca.pth')
 
 
 pca_features_bg = pca_features[:, 0] > 0.35

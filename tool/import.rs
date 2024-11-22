@@ -8,7 +8,10 @@ use bevy_args::{
 use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder, Recorder};
 use burn_import::pytorch::{LoadArgs, PyTorchFileRecorder};
 
-use burn_dinov2::model::dinov2::DinoVisionTransformerRecord;
+use burn_dino::model::{
+    dino::DinoVisionTransformerRecord,
+    pca::PcaTransformRecord,
+};
 
 
 #[derive(
@@ -47,7 +50,7 @@ impl VitType {
     Deserialize,
     Parser,
 )]
-#[command(about = "burn_dinov2 import", version, long_about = None)]
+#[command(about = "burn_dino import", version, long_about = None)]
 pub struct DinoImportConfig {
     #[arg(long, value_enum, default_value_t = VitType::Small)]
     pub vit_type: VitType,
@@ -73,5 +76,20 @@ fn main() {
     let recorder = NamedMpkFileRecorder::<FullPrecisionSettings>::default();
     recorder
         .record(record, "./assets/models/dinov2".into())
+        .expect("failed to save model record");
+
+
+    // import safetensors -> mpk for PCA components, check if weights exist
+    let pca_weights = "./assets/models/dino_pca.pth";
+    let load_args = LoadArgs::new(pca_weights.into())
+        .with_debug_print();
+
+    let record: PcaTransformRecord<Backend> = PyTorchFileRecorder::<FullPrecisionSettings>::default()
+        .load(load_args, &device)
+        .expect("failed to decode state");
+
+    let recorder = NamedMpkFileRecorder::<FullPrecisionSettings>::default();
+    recorder
+        .record(record, "./assets/models/pca".into())
         .expect("failed to save model record");
 }

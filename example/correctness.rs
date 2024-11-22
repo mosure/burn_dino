@@ -4,11 +4,11 @@ use burn::{
     record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
 };
 use image::{
-    load_from_memory_with_format, DynamicImage, GenericImageView, ImageFormat
+    load_from_memory_with_format, DynamicImage, GenericImageView, ImageFormat,
 };
 use safetensors::tensor::SafeTensors;
 
-use burn_dinov2::model::dinov2::{
+use burn_dino::model::dino::{
     DinoVisionTransformer,
     DinoVisionTransformerConfig,
 };
@@ -58,7 +58,6 @@ fn normalize<B: Backend>(
         .permute([0, 3, 1, 2])
 }
 
-// TODO: fix load differences
 fn load_image<B: Backend>(
     bytes: &[u8],
     config: &DinoVisionTransformerConfig,
@@ -79,7 +78,8 @@ fn load_image<B: Backend>(
         device,
     );
 
-    let input = input.reshape([1, config.input_channels, config.image_size, config.image_size]);
+    let input = input.reshape([1, config.image_size, config.image_size, config.input_channels])
+        .permute([0, 3, 1, 2]);
 
     normalize(input, device)
 }
@@ -92,21 +92,42 @@ fn main() {
     };
     let dino = load_model::<Wgpu>(&config, &device);
 
-    let debug_output = SafeTensors::deserialize(STANDARD_OUTPUT).unwrap();
-    let input = debug_output.tensor("input").unwrap();
-    let standard_input: Vec<f32> = input
-        .data()
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
-    let standard_input_tensor = Tensor::<Wgpu, 1>::from_floats(standard_input.as_slice(), &device)
-        .reshape([1, config.input_channels, config.image_size, config.image_size]);
-    let input_tensor = standard_input_tensor.clone();
+    // let debug_output = SafeTensors::deserialize(STANDARD_OUTPUT).unwrap();
+    // let input = debug_output.tensor("input").unwrap();
+    // let standard_input: Vec<f32> = input
+    //     .data()
+    //     .chunks_exact(4)
+    //     .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+    //     .collect();
+    // let standard_input_tensor = Tensor::<Wgpu, 1>::from_floats(standard_input.as_slice(), &device)
+    //     .reshape([1, config.input_channels, config.image_size, config.image_size]);
+    // let input_tensor = standard_input_tensor.clone();
 
-    // let input_tensor: Tensor<Wgpu, 4> = load_image(INPUT_IMAGE_0, &config, &device);
+    let input_tensor: Tensor<Wgpu, 4> = load_image(INPUT_IMAGE_0, &config, &device);
+
+    // let standard_diff = input_tensor.clone().sub(standard_input_tensor.clone()).abs();
+    // let min_diff = standard_diff.clone().min();
+    // let max_diff = standard_diff.clone().max();
+    // let range = max_diff - min_diff;
+    // let standard_diff_min_max_norm = standard_diff.clone().div_scalar(range.into_scalar());
+
+    // let standard_diff_min_max_norm_flat: Vec<f32> = standard_diff_min_max_norm.to_data().to_vec().unwrap();
+    // let standard_diff_min_max_norm_flat: Vec<u8> = standard_diff_min_max_norm_flat
+    //     .iter()
+    //     .map(|&v| (v * 255.0).round() as u8)
+    //     .collect();
+    // let img = RgbImage::from_raw(
+    //     config.image_size as u32,
+    //     config.image_size as u32,
+    //     standard_diff_min_max_norm_flat,
+    // ).unwrap();
+    // img.save("diff.png").unwrap();
+
+    // let diff_sum = standard_diff.sum().into_scalar();
+    // println!("diff sum: {}", diff_sum);
 
     // assert!(
-    //     input_tensor.clone().all_close(standard_input_tensor, 1e-1.into(), None),
+    //     input_tensor.clone().all_close(standard_input_tensor, 2e-1.into(), None),
     //     "input does not match torch reference",
     // );
 

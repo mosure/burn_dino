@@ -1,5 +1,5 @@
 [package]
-name = "burn_dinov2"
+name = "burn_dino"
 description = "burn dinov2 model inference and training"
 version = "0.1.0"
 edition = "2021"
@@ -7,14 +7,15 @@ authors = ["mosure <mitchell@mosure.me>"]
 license = "MIT OR Apache-2.0"
 keywords = [
   "burn",
+  "dino",
   "dinov2",
   "vit",
 ]
 categories = [
   "computer-vision",
 ]
-homepage = "https://github.com/mosure/burn_dinov2"
-repository = "https://github.com/mosure/burn_dinov2"
+homepage = "https://github.com/mosure/burn_dino"
+repository = "https://github.com/mosure/burn_dino"
 readme = "README.md"
 exclude = [
   ".devcontainer",
@@ -25,6 +26,13 @@ exclude = [
   "assets",
   "credits",
 ]
+
+[workspace]
+members = [
+  "ui",
+]
+
+resolver = "2"
 
 
 [dependencies]
@@ -118,6 +126,10 @@ path = "tool/import.rs"
 [[example]]
 name = "correctness"
 path = "example/correctness.rs"
+
+[[example]]
+name = "pca"
+path = "example/pca.rs"
 
 [[example]]
 name = "tsne"
