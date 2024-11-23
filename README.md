@@ -1,5 +1,15 @@
-# burn_dino
-burn dinov2 model 🔥 view the [live demo]()
+# burn_dino 🔥🦖
+
+[![test](https://github.com/mosure/burn_dino/workflows/test/badge.svg)](https://github.com/Mosure/burn_dino/actions?query=workflow%3Atest)
+[![GitHub License](https://img.shields.io/github/license/mosure/burn_dino)](https://raw.githubusercontent.com/mosure/burn_dino/main/LICENSE)
+[![GitHub Last Commit](https://img.shields.io/github/last-commit/mosure/burn_dino)](https://github.com/mosure/burn_dino)
+[![GitHub Releases](https://img.shields.io/github/v/release/mosure/burn_dino?include_prereleases&sort=semver)](https://github.com/mosure/burn_dino/releases)
+[![GitHub Issues](https://img.shields.io/github/issues/mosure/burn_dino)](https://github.com/mosure/burn_dino/issues)
+[![Average time to resolve an issue](https://isitmaintained.com/badge/resolution/mosure/burn_dino.svg)](http://isitmaintained.com/project/mosure/burn_dino)
+[![crates.io](https://img.shields.io/crates/v/burn_dino.svg)](https://crates.io/crates/burn_dino)
+
+
+burn [dinov2](https://arxiv.org/abs/2304.07193) model, view the [live demo]()
 
 | input               | fg pca               |
 |-----------------------|-----------------------|
