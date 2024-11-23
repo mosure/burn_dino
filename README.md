@@ -32,7 +32,7 @@ burn [dinov2](https://arxiv.org/abs/2304.07193) model, view the [live demo]()
 - [ ] optimized attention
 - [ ] automatic weights cache/download
 - [ ] quantization
-- [ ] feature upsampling
+- [ ] [feature upsampling](https://github.com/mhamilton723/FeatUp)
 
 
 ## setup
