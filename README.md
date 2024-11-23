@@ -1,5 +1,5 @@
 # burn_dino
-burn dinov2 model 🔥
+burn dinov2 model 🔥 view the [live demo]()
 
 | input               | fg pca               |
 |-----------------------|-----------------------|
@@ -9,6 +9,7 @@ burn dinov2 model 🔥
 | ![Alt text](./assets/images/dino_3.png)    | ![Alt text](./docs/images/dino_3_pca.png)    |
 
 `cargo run --example pca`
+`cargo run -p bevy_burn_dino`
 
 
 ## features
@@ -16,6 +17,7 @@ burn dinov2 model 🔥
 - [x] inference
 - [x] pca transform layer
 - [x] all ViT configurations
+- [x] real-time camera demo
 - [ ] training (loss + dropout)
 - [ ] optimized attention
 - [ ] automatic weights cache/download
