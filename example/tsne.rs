@@ -6,14 +6,11 @@ use burn::{
 use image::{
     load_from_memory_with_format,
     DynamicImage,
-    GenericImage,
     ImageFormat,
-    Luma,
-    Pixel,
     RgbImage,
 };
 use bhtsne::tSNE;
-use ndarray::{Array2, Array4, ArrayBase, ArrayView2, Ix4, s, ViewRepr};
+use ndarray::Array2;
 
 use burn_dino::model::dino::{
     DinoVisionTransformer,
@@ -155,6 +152,10 @@ fn main() {
             )
             .unwrap();
 
-        img.save(format!("output_{}.png", i)).unwrap();
+        let output_directory = std::path::Path::new("output/tsne");
+        std::fs::create_dir_all(output_directory).unwrap();
+
+        let output_path = output_directory.join(format!("{}.png", i));
+        img.save(output_path).unwrap();
     }
 }

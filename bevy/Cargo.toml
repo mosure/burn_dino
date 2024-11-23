@@ -1,0 +1,86 @@
+[package]
+name = "bevy_burn_dino"
+version = "0.1.0"
+edition = "2021"
+authors = ["mosure <mitchell@mosure.me>"]
+license = "MIT OR Apache-2.0"
+keywords = [
+  "bevy",
+  "burn",
+  "dino",
+  "nokhwa",
+]
+categories = [
+  "computer-vision",
+]
+
+
+[features]
+default = ["native"]
+
+native = ["nokhwa"]
+web = []
+
+
+[dependencies]
+bevy_args = "1.5"
+burn_dino = { path = "../" }
+clap = { version = "4.5", features = ["derive"] }
+futures-intrusive = "0.5"
+image = { version = "0.25.2", default-features = false, features = ["png"] }
+nokhwa = { version = "0.10", features = ["input-native", "output-threaded"], optional = true }
+once_cell = "1.19"
+serde = "1.0"
+
+
+# TODO: burn currently uses wgpu 22, bevy 0.15 uses wgpu 23
+
+
+[dependencies.bevy]
+version = "0.14"
+default-features = false
+features = [
+  "bevy_asset",
+  "bevy_render",
+  "bevy_ui",
+  "bevy_winit",
+  "default_font",
+  "png",
+]
+
+[dependencies.burn]
+version = "0.15"
+features = [
+  "autodiff",
+  "autotune",
+  "dataset",
+  "fusion",
+  "metrics",
+  "ndarray",
+  "network",
+  "train",
+  "tui",
+  "wgpu",
+]
+
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+wasm-bindgen = "0.2"
+
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  'Document',
+  'Element',
+  'HtmlElement',
+  'Location',
+  'Node',
+  'Window',
+]
+
+
+[[bin]]
+name = "ui"
+path = "src/main.rs"

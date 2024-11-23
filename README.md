@@ -19,6 +19,7 @@ burn dinov2 model 🔥
 - [ ] training (loss + dropout)
 - [ ] optimized attention
 - [ ] automatic weights cache/download
+- [ ] quantization
 
 
 ## setup

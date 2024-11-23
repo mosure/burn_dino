@@ -191,7 +191,7 @@ fn main() {
     let pca_features = pca_features.reshape([batch, spatial_size, spatial_size, 3]);
     write_images(
         pca_features,
-        Path::new("output"),
+        Path::new("output/pca"),
         config.image_size as u32,
         config.image_size as u32,
     );
