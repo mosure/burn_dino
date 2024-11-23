@@ -24,7 +24,7 @@ web = []
 
 [dependencies]
 bevy_args = "1.5"
-burn_dino = { path = "../" }
+burn_dino = { path = "../../" }
 clap = { version = "4.5", features = ["derive"] }
 futures-intrusive = "0.5"
 image = { version = "0.25.2", default-features = false, features = ["png"] }

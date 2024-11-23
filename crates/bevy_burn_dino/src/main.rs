@@ -61,8 +61,8 @@ pub struct DinoImportConfig {
 
 
 
-static DINO_STATE_ENCODED: &[u8] = include_bytes!("../../assets/models/dinov2.mpk");
-static PCA_STATE_ENCODED: &[u8] = include_bytes!("../../assets/models/pca.mpk");
+static DINO_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/dinov2.mpk");
+static PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/pca.mpk");
 
 
 fn load_model<B: Backend>(

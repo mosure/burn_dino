@@ -29,7 +29,7 @@ exclude = [
 
 [workspace]
 members = [
-  "bevy",
+  "crates/bevy_burn_dino",
 ]
 
 resolver = "2"
