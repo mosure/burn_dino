@@ -26,7 +26,7 @@ burn [dinov2](https://arxiv.org/abs/2304.07193) model, view the [live demo]()
 
 - [x] inference
 - [x] pca transform layer
-- [x] all ViT configurations
+- [x] ViT configurations
 - [x] real-time camera demo
 - [ ] training (loss + dropout)
 - [ ] optimized attention
