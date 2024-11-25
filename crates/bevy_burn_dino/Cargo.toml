@@ -32,7 +32,6 @@ nokhwa = { version = "0.10", features = ["input-native", "output-threaded"], opt
 once_cell = "1.19"
 serde = "1.0"
 
-
 # TODO: burn currently uses wgpu 22, bevy 0.15 uses wgpu 23
 
 
