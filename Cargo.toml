@@ -41,6 +41,7 @@ import = ["bevy_args", "burn-import", "clap", "serde"]
 
 [dependencies]
 bevy_args = { version = "1.6", optional = true }
+burn-fusion = "0.15"
 burn-import = { version = "0.15", features = ["pytorch"], optional = true }
 burn-jit = "0.15"
 clap = { version = "4.5", features = ["derive"], optional = true }

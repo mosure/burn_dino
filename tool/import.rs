@@ -8,10 +8,14 @@ use bevy_args::{
 use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder, Recorder};
 use burn_import::pytorch::{LoadArgs, PyTorchFileRecorder};
 
-use burn_dino::model::{
-    dino::DinoVisionTransformerRecord,
-    pca::PcaTransformRecord,
+use burn_dino::{
+    layers::jbu::JbuStackRecord,
+    model::{
+        dino::DinoVisionTransformerRecord,
+        pca::PcaTransformRecord,
+    },
 };
+use cubecl::wgpu::WgpuRuntime;
 
 
 #[derive(
@@ -57,7 +61,8 @@ pub struct DinoImportConfig {
 }
 
 
-type Backend = burn::backend::NdArray<f32>;
+// type ImportBackend = burn::backend::Wgpu;
+type ImportBackend = burn::backend::wgpu::JitBackend<WgpuRuntime, f32, i32>;
 
 fn main() {
     let args = parse_args::<DinoImportConfig>();
@@ -69,7 +74,7 @@ fn main() {
 
     let load_args = LoadArgs::new(weights_path.into())
         .with_debug_print();
-    let record: DinoVisionTransformerRecord<Backend> = PyTorchFileRecorder::<FullPrecisionSettings>::default()
+    let record: DinoVisionTransformerRecord<ImportBackend> = PyTorchFileRecorder::<FullPrecisionSettings>::default()
         .load(load_args, &device)
         .expect("failed to decode state");
 
@@ -79,17 +84,37 @@ fn main() {
         .expect("failed to save model record");
 
 
-    // import safetensors -> mpk for PCA components, check if weights exist
+    // pca layer
     let pca_weights = "./assets/models/dino_pca.pth";
     let load_args = LoadArgs::new(pca_weights.into())
         .with_debug_print();
 
-    let record: PcaTransformRecord<Backend> = PyTorchFileRecorder::<FullPrecisionSettings>::default()
+    let record: PcaTransformRecord<ImportBackend> = PyTorchFileRecorder::<FullPrecisionSettings>::default()
         .load(load_args, &device)
         .expect("failed to decode state");
 
     let recorder = NamedMpkFileRecorder::<FullPrecisionSettings>::default();
     recorder
         .record(record, "./assets/models/pca".into())
+        .expect("failed to save model record");
+
+
+    // upsampler
+    let upsampler_weights = "./assets/models/upsampler.pth";
+    let load_args = LoadArgs::new(upsampler_weights.into())
+        .with_key_remap("range_proj\\.0\\.(.*)", "range_proj.conv1.$1")
+        .with_key_remap("range_proj\\.3\\.(.*)", "range_proj.conv2.$1")
+        .with_key_remap("fixup_proj\\.0\\.(.*)", "fixup_proj.conv1.$1")
+        .with_key_remap("fixup_proj\\.3\\.(.*)", "fixup_proj.conv2.$1")
+        .with_key_remap("fixup_proj\\.1\\.(.*)", "fixup_proj.conv.$1")
+        .with_debug_print();
+
+    let record: JbuStackRecord<ImportBackend> = PyTorchFileRecorder::<FullPrecisionSettings>::default()
+        .load(load_args, &device)
+        .expect("failed to decode state");
+
+    let recorder = NamedMpkFileRecorder::<FullPrecisionSettings>::default();
+    recorder
+        .record(record, "./assets/models/upsampler".into())
         .expect("failed to save model record");
 }

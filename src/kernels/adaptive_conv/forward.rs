@@ -1,7 +1,8 @@
-use burn::tensor::{
-    ops::FloatTensor,
-    Shape,
-};
+// use burn_fusion::{
+//     Fusion,
+//     FusionBackend,
+//     FusionRuntime,
+// };
 use burn_jit::{
     kernel::into_contiguous,
     tensor::JitTensor,
@@ -9,6 +10,10 @@ use burn_jit::{
     IntElement,
     JitBackend,
     JitRuntime,
+};
+use burn::tensor::{
+    ops::FloatTensor,
+    Shape,
 };
 use cubecl::{
     CubeCount,

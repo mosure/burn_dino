@@ -307,8 +307,8 @@ impl JbuStackConfig {
 
 #[derive(Module, Debug)]
 pub struct JbuStackFixup<B: Backend> {
-    dropout: Dropout,
     conv: Conv2d<B>,
+    dropout: Dropout,
 }
 
 impl<B: Backend> JbuStackFixup<B> {
@@ -316,17 +316,17 @@ impl<B: Backend> JbuStackFixup<B> {
         device: &B::Device,
         feat_dim: usize,
     ) -> Self {
-        let dropout = DropoutConfig::new(0.2)
-            .init();
-
         let conv = Conv2dConfig::new(
             [feat_dim, feat_dim],
             [1, 1],
         ).init(device);
 
+        let dropout = DropoutConfig::new(0.2)
+            .init();
+
         Self {
-            dropout,
             conv,
+            dropout,
         }
     }
 
@@ -342,10 +342,10 @@ impl<B: Backend> JbuStackFixup<B> {
 
 #[derive(Module, Debug)]
 pub struct JbuStack<B: Backend> {
-    jbu1: JbuLearnedRange<B>,
-    jbu2: JbuLearnedRange<B>,
-    jbu3: JbuLearnedRange<B>,
-    jbu4: JbuLearnedRange<B>,
+    up1: JbuLearnedRange<B>,
+    up2: JbuLearnedRange<B>,
+    up3: JbuLearnedRange<B>,
+    up4: JbuLearnedRange<B>,
     pool1: AdaptiveAvgPool2d,
     pool2: AdaptiveAvgPool2d,
     pool3: AdaptiveAvgPool2d,
@@ -367,10 +367,10 @@ impl<B: Backend> JbuStack<B> {
             config.height,
         );
 
-        let jbu1 = jbu_config.init(device);
-        let jbu2 = jbu_config.init(device);
-        let jbu3 = jbu_config.init(device);
-        let jbu4 = jbu_config.init(device);
+        let up1 = jbu_config.init(device);
+        let up2 = jbu_config.init(device);
+        let up3 = jbu_config.init(device);
+        let up4 = jbu_config.init(device);
 
         let pool1 = AdaptiveAvgPool2dConfig::new(
             [config.feature_height * 2, config.feature_width * 2],
@@ -391,10 +391,10 @@ impl<B: Backend> JbuStack<B> {
         let fixup_proj = JbuStackFixup::new(device, config.feat_dim);
 
         Self {
-            jbu1,
-            jbu2,
-            jbu3,
-            jbu4,
+            up1,
+            up2,
+            up3,
+            up4,
             pool1,
             pool2,
             pool3,
@@ -419,10 +419,10 @@ impl<B: Backend> JbuStack<B> {
         source: Tensor<B, 4>,
         guidance: Tensor<B, 4>,
     ) -> Tensor<B, 4> {
-        let source = self.upsample(source, guidance.clone(), &self.jbu1, &self.pool1);
-        let source = self.upsample(source, guidance.clone(), &self.jbu2, &self.pool2);
-        let source = self.upsample(source, guidance.clone(), &self.jbu3, &self.pool3);
-        let source = self.upsample(source, guidance, &self.jbu4, &self.pool4);
+        let source = self.upsample(source, guidance.clone(), &self.up1, &self.pool1);
+        let source = self.upsample(source, guidance.clone(), &self.up2, &self.pool2);
+        let source = self.upsample(source, guidance.clone(), &self.up3, &self.pool3);
+        let source = self.upsample(source, guidance, &self.up4, &self.pool4);
 
         self.fixup_proj.forward(source.clone()).mul_scalar(0.1) + source
     }
