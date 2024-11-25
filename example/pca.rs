@@ -2,10 +2,9 @@ use std::path::Path;
 
 use burn::{
     prelude::*,
-    backend::wgpu::Wgpu,
+    // backend::wgpu::Wgpu,
     record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
 };
-use cubecl::wgpu::WgpuRuntime;
 use image::{
     load_from_memory_with_format,
     DynamicImage,
@@ -14,7 +13,10 @@ use image::{
 };
 
 use burn_dino::{
-    kernels::adaptive_conv::Backend,
+    kernels::adaptive_conv::{
+        forward::InnerBackend,
+        Backend,
+    },
     layers::jbu::{
         JbuStack,
         JbuStackConfig,
@@ -29,9 +31,6 @@ use burn_dino::{
         },
     },
 };
-
-
-type InferenceBackend = burn::backend::wgpu::JitBackend<WgpuRuntime, f32, i32>;
 
 
 static DINO_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/dinov2.mpk");
@@ -176,7 +175,7 @@ fn main() {
 
     let mut input_tensors = Vec::new();
     for input in input_pngs {
-        let input_tensor: Tensor<InferenceBackend, 4> = load_image(input, &config, &device);
+        let input_tensor: Tensor<InnerBackend, 4> = load_image(input, &config, &device);
         input_tensors.push(input_tensor);
     }
 
@@ -192,7 +191,8 @@ fn main() {
     let low_res = dino_features
         .clone()
         .reshape([batch, spatial_size, spatial_size, embedding_dim])
-        .permute([0, 3, 1, 2]);
+        .permute([0, 3, 1, 2])
+        .slice([0..1]);  // TODO: process all image
 
     let upsampler_config = JbuStackConfig::new(
         embedding_dim,
@@ -202,13 +202,17 @@ fn main() {
         spatial_size,
     );
     let upsampler = load_upsampler(&upsampler_config, &device);
-    let high_res = upsampler.forward(low_res, batched_input);
+    let high_res = upsampler.forward(
+        low_res,
+        batched_input.slice([0..1]),  // TODO: process all image
+    );
 
     let n_high_res_samples = batch * config.image_size * config.image_size;
 
-    let x = high_res
+    let x: Tensor<burn_jit::JitBackend<cubecl::wgpu::WgpuRuntime, f32, i32>, 2> = high_res
         .permute([0, 2, 3, 1])
-        .reshape([n_high_res_samples, embedding_dim]);
+        .reshape([-1, embedding_dim as i32]);
+        // .reshape([n_high_res_samples, embedding_dim as i32]);
 
     let pca_config = PcaTransformConfig::new(
         batch,
@@ -231,7 +235,14 @@ fn main() {
         );
     }
 
-    let pca_features = pca_features.reshape([batch, spatial_size, spatial_size, 3]);
+    let high_res_size = (pca_features.shape().dims[0] / batch).isqrt();
+
+    let pca_features = pca_features.reshape([
+        batch,
+        high_res_size,
+        high_res_size,
+        3,
+    ]);
     write_images(
         pca_features,
         Path::new("output/pca"),

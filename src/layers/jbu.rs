@@ -138,7 +138,7 @@ pub struct JbuLearnedRange<B: Backend> {
     diameter: usize,
     key_dim: usize,
     upsample: Interpolate2d,
-    patch: Tensor<B, 4>,
+    patch: Tensor<B, 3>,
     unfold: Unfold4d,
 }
 
@@ -175,6 +175,7 @@ impl<B: Backend> JbuLearnedRange<B> {
         let unfold = Unfold4dConfig::new([diameter, diameter])
             .with_dilation([1, 1])
             .with_stride([1, 1])
+            .with_padding([0, 0])
             .init();
 
         Self {
@@ -199,6 +200,9 @@ impl<B: Backend> JbuLearnedRange<B> {
             (self.radius, self.radius, self.radius, self.radius),
             0.0.elem(),  // TODO: reflect pad
         );
+
+        // TODO: unfold operator hits a size limit 2^16 when processing [4, 32, 302, 302] inputs
+        println!("proj_x_padded: {:?}", proj_x_padded.shape());
 
         let queries = self.unfold.forward(proj_x_padded)
             .reshape([B, self.key_dim, self.diameter * self.diameter, H, W])
@@ -246,7 +250,6 @@ impl<B: Backend> JbuLearnedRange<B> {
         let combined_kernel = range_kernel * spatial_kernel;
         let kernel_sum = combined_kernel.clone()
             .sum_dim(1)
-            .unsqueeze_dim(1)
             .clamp_min(1e-7);
 
         let combined_kernel = combined_kernel.div(kernel_sum);
@@ -358,34 +361,61 @@ impl<B: Backend> JbuStack<B> {
         device: &B::Device,
         config: &JbuStackConfig,
     ) -> Self {
-        let jbu_config = JbuLearnedRangeConfig::new(
+        let out1 = config.feature_height * 2;
+        let out2 = config.feature_height * 4;
+        let out3 = config.feature_height * 8;
+        let out4 = config.feature_height * 16;
+
+        let up1 = JbuLearnedRangeConfig::new(
             3,
             config.feat_dim,
             32,
             3,
-            config.width,
-            config.height,
-        );
+            out1,
+            out1,
+        ).init(device);
 
-        let up1 = jbu_config.init(device);
-        let up2 = jbu_config.init(device);
-        let up3 = jbu_config.init(device);
-        let up4 = jbu_config.init(device);
+        let up2 = JbuLearnedRangeConfig::new(
+            3,
+            config.feat_dim,
+            32,
+            3,
+            out2,
+            out2,
+        ).init(device);
+
+        let up3 = JbuLearnedRangeConfig::new(
+            3,
+            config.feat_dim,
+            32,
+            3,
+            out3,
+            out3,
+        ).init(device);
+
+        let up4 = JbuLearnedRangeConfig::new(
+            3,
+            config.feat_dim,
+            32,
+            3,
+            out4,
+            out4,
+        ).init(device);
 
         let pool1 = AdaptiveAvgPool2dConfig::new(
-            [config.feature_height * 2, config.feature_width * 2],
+            [out1, out1],
         ).init();
 
         let pool2 = AdaptiveAvgPool2dConfig::new(
-            [config.feature_height * 4, config.feature_width * 4],
+            [out2, out2],
         ).init();
 
         let pool3 = AdaptiveAvgPool2dConfig::new(
-            [config.feature_height * 8, config.feature_width * 8],
+            [out3, out3],
         ).init();
 
         let pool4 = AdaptiveAvgPool2dConfig::new(
-            [config.feature_height * 16, config.feature_width * 16],
+            [out4, out4],
         ).init();
 
         let fixup_proj = JbuStackFixup::new(device, config.feat_dim);

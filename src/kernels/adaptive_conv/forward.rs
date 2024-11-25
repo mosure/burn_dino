@@ -1,7 +1,9 @@
 // use burn_fusion::{
+//     fusion::{FusionJitRuntime, JitFusionHandle},
 //     Fusion,
 //     FusionBackend,
 //     FusionRuntime,
+//     stream::Operation,
 // };
 use burn_jit::{
     kernel::into_contiguous,
@@ -13,18 +15,81 @@ use burn_jit::{
 };
 use burn::tensor::{
     ops::FloatTensor,
+    // repr::{CustomOpDescription, HandleContainer, OperationDescription},
     Shape,
 };
 use cubecl::{
     CubeCount,
     CubeDim,
+    wgpu::WgpuRuntime,
 };
 
-use super::Backend;
+use super::Backend as AdaptiveConvBackend;
 use super::kernel::adaptive_conv_forward_kernel;
 
+// type InnerWgpu = JitBackend<WgpuRuntime, f32, i32>;
+pub type InnerBackend = JitBackend<WgpuRuntime, f32, i32>;
 
-impl<R: JitRuntime, F: FloatElement, I: IntElement> Backend for JitBackend<R, F, I> {
+
+// TODO: wait on burn release /w custom fusion op support
+// impl AdaptiveConvBackend for Fusion<InnerWgpu> {
+//     fn adaptive_conv(
+//         inputs: Self::FloatTensorPrimitive,
+//         filters: Self::FloatTensorPrimitive,
+//     ) -> Self::FloatTensorPrimitive {
+//         struct CustomOp {
+//             desc: CustomOpDescription,
+//         }
+
+//         impl Operation<FusionJitRuntime<WgpuRuntime>> for CustomOp {
+//             fn execute(self: Box<Self>, h: &mut HandleContainer<JitFusionHandle<WgpuRuntime>>) {
+//                 let (
+//                     [inputs, filters],
+//                     [adaptive_conv_out],
+//                 ) = self.desc.consume();
+
+//                 let x = adaptive_conv_forward(
+//                     h.get_float_tensor::<InnerWgpu>(&inputs),
+//                     h.get_float_tensor::<InnerWgpu>(&filters),
+//                 );
+
+//                 h.register_float_tensor::<InnerWgpu>(&adaptive_conv_out.id, x);
+//             }
+//         }
+
+//         let stream = inputs.stream;
+//         let client = inputs.client.clone();
+
+//         let batch = inputs.shape[0];
+
+//         let adaptive_conv_out = client.tensor_uninitialized(
+//             inputs.shape.dims.clone(),
+//             DType::F32,
+//         );
+
+//         let desc = CustomOpDescription::new(
+//             "adaptive_conv",
+//             &[
+//                 inputs.into_description(),
+//                 filters.into_description(),
+//             ],
+//             &[
+//                 adaptive_conv_out.to_description_out(),
+//             ],
+//         );
+
+//         let op = CustomOp {
+//             desc: desc.clone(),
+//         };
+
+//         client.register(vec![stream], OperationDescription::Custom(desc), op);
+
+//         adaptive_conv_out
+//     }
+// }
+
+
+impl<R: JitRuntime, F: FloatElement, I: IntElement> AdaptiveConvBackend for JitBackend<R, F, I> {
     fn adaptive_conv(
         input: FloatTensor<Self>,    // Input tensor: shape [B, C, H_in, W_in]
         filters: FloatTensor<Self>,  // Filters tensor: shape [B, H_out, W_out, I, J]
@@ -47,11 +112,11 @@ impl<R: JitRuntime, F: FloatElement, I: IntElement> Backend for JitBackend<R, F,
         let I = filters.shape.dims[3];
         let J = filters.shape.dims[4];
 
-        assert_eq!(B, B_filters, "Batch size of input and filters must match");
+        assert_eq!(B, B_filters, "batch size of input and filters must match");
         let H_expected = H_out + I - 1;
         let W_expected = W_out + J - 1;
-        assert_eq!(H_in, H_expected, "Input height must be H_out + I - 1");
-        assert_eq!(W_in, W_expected, "Input width must be W_out + J - 1");
+        assert_eq!(H_in, H_expected, "input height must be H_out + I - 1");
+        assert_eq!(W_in, W_expected, "input width must be W_out + J - 1");
 
         let shape_out = Shape::new([B, C, H_out, W_out]);
 
