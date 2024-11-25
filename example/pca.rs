@@ -5,6 +5,7 @@ use burn::{
     backend::wgpu::Wgpu,
     record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
 };
+use cubecl::wgpu::WgpuRuntime;
 use image::{
     load_from_memory_with_format,
     DynamicImage,
@@ -12,19 +13,30 @@ use image::{
     RgbImage,
 };
 
-use burn_dino::model::{
-    dino::{
-        DinoVisionTransformer,
-        DinoVisionTransformerConfig,
+use burn_dino::{
+    kernels::adaptive_conv::Backend,
+    layers::jbu::{
+        JbuStack,
+        JbuStackConfig,
     },
-    pca::{
-        PcaTransform, PcaTransformConfig
+    model::{
+        dino::{
+            DinoVisionTransformer,
+            DinoVisionTransformerConfig,
+        },
+        pca::{
+            PcaTransform, PcaTransformConfig
+        },
     },
 };
 
 
+type InferenceBackend = burn::backend::wgpu::JitBackend<WgpuRuntime, f32, i32>;
+
+
 static DINO_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/dinov2.mpk");
 static PCA_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/pca.mpk");
+static UPSAMPLER_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/upsampler.mpk");
 
 static INPUT_IMAGE_0: &[u8] = include_bytes!("../assets/images/dino_0.png");
 static INPUT_IMAGE_1: &[u8] = include_bytes!("../assets/images/dino_1.png");
@@ -50,6 +62,18 @@ fn load_pca_model<B: Backend>(
 ) -> PcaTransform<B> {
     let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
         .load(PCA_STATE_ENCODED.to_vec(), &Default::default())
+        .expect("failed to decode state");
+
+    let model= config.init(device);
+    model.load_record(record)
+}
+
+fn load_upsampler<B: Backend>(
+    config: &JbuStackConfig,
+    device: &B::Device,
+) -> JbuStack<B> {
+    let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
+        .load(UPSAMPLER_STATE_ENCODED.to_vec(), &Default::default())
         .expect("failed to decode state");
 
     let model= config.init(device);
@@ -152,7 +176,7 @@ fn main() {
 
     let mut input_tensors = Vec::new();
     for input in input_pngs {
-        let input_tensor: Tensor<Wgpu, 4> = load_image(input, &config, &device);
+        let input_tensor: Tensor<InferenceBackend, 4> = load_image(input, &config, &device);
         input_tensors.push(input_tensor);
     }
 
@@ -165,7 +189,26 @@ fn main() {
     let n_samples = batch * elements;
     let spatial_size = elements.isqrt();
 
-    let x = dino_features.reshape([n_samples, embedding_dim]);
+    let low_res = dino_features
+        .clone()
+        .reshape([batch, spatial_size, spatial_size, embedding_dim])
+        .permute([0, 3, 1, 2]);
+
+    let upsampler_config = JbuStackConfig::new(
+        embedding_dim,
+        config.image_size,
+        config.image_size,
+        spatial_size,
+        spatial_size,
+    );
+    let upsampler = load_upsampler(&upsampler_config, &device);
+    let high_res = upsampler.forward(low_res, batched_input);
+
+    let n_high_res_samples = batch * config.image_size * config.image_size;
+
+    let x = high_res
+        .permute([0, 2, 3, 1])
+        .reshape([n_high_res_samples, embedding_dim]);
 
     let pca_config = PcaTransformConfig::new(
         batch,
