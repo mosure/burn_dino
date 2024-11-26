@@ -56,7 +56,6 @@ impl<B: Backend, const D: usize> Mlp<B, D> {
         let x = self.act.forward(x);
         let x = self.dropout.forward(x);
         let x = self.fc2.forward(x);
-        let x = self.dropout.forward(x);
-        x
+        self.dropout.forward(x)
     }
 }

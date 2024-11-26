@@ -22,7 +22,7 @@ impl Default for PcaTransformConfig {
 
 impl PcaTransformConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> PcaTransform<B> {
-        PcaTransform::new(device, &self)
+        PcaTransform::new(device, self)
     }
 }
 

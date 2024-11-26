@@ -196,8 +196,10 @@ async fn process_frame<B: Backend>(
 ) -> Vec<u8> {
     let input_tensor: Tensor<B, 4> = preprocess_image(input, &dino_config, &device);
 
-    let model = dino_model.lock().unwrap();
-    let dino_features = model.forward(input_tensor.clone(), None).x_norm_patchtokens;
+    let dino_features = {
+        let model = dino_model.lock().unwrap();
+        model.forward(input_tensor.clone(), None).x_norm_patchtokens
+    };
 
     let batch = dino_features.shape().dims[0];
     let elements = dino_features.shape().dims[1];
@@ -207,8 +209,10 @@ async fn process_frame<B: Backend>(
 
     let x = dino_features.reshape([n_samples, embedding_dim]);
 
-    let pca_transform = pca_model.lock().unwrap();
-    let mut pca_features = pca_transform.forward(x.clone());
+    let mut pca_features = {
+        let pca_transform = pca_model.lock().unwrap();
+        pca_transform.forward(x.clone())
+    };
 
     // pca min-max scaling
     for i in 0..3 {
@@ -495,7 +499,7 @@ fn setup_ui(
             });
         });
 
-    commands.spawn(Camera2d::default());
+    commands.spawn(Camera2d);
 }
 
 pub fn viewer_app() -> App {
@@ -661,7 +665,7 @@ async fn run_app() {
     app.init_resource::<PcaFeatures>();
     app.insert_resource(DinoModel {
         config,
-        device: device,
+        device,
         model: Arc::new(Mutex::new(dino)),
     });
     app.insert_resource(PcaTransformModel {
