@@ -1,7 +1,7 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>burn_dino</title>
+    <title>bevy_burn_dino</title>
     <style>
       body {
         width: 100%;
@@ -23,6 +23,9 @@
         -webkit-animation: animation-rotate 950ms cubic-bezier(.64,2,.56,.6) infinite;
         animation: animation-rotate 950ms cubic-bezier(.64,2,.56,.6) infinite;
       }
+      .removed {
+        display: none;
+      }
       @-webkit-keyframes animation-rotate {
         100% {
           -webkit-transform: rotate(360deg);
@@ -37,9 +40,61 @@
     </style>
   </head>
   <script type="module">
-    import init from './out/bevy_burn_dino.js'
+    import init, { frame_input } from './out/bevy_burn_dino.js'
     init()
     document.querySelector('.loading').style.display = 'none'
+
+    const video = document.getElementById('webcam');
+
+    function getUserMediaSupported() {
+      return !!(navigator.mediaDevices &&
+          navigator.mediaDevices.getUserMedia);
+    }
+
+    if (!getUserMediaSupported()) {
+      alert('getUserMedia() is not supported by your browser');
+    }
+
+    const constraints = {
+      video: true,
+      audio: false,
+    };
+
+    async function handle_frame(reader) {
+      const { value: frame, done } = await reader.read();
+      if (done) {
+        console.log('Stream has ended');
+        return;
+      }
+
+      const format = 'RGBA';
+      const pixelBuffer = new Uint8Array(frame.allocationSize({ format }));
+
+      try {
+        await frame.copyTo(pixelBuffer, { format });
+      } catch (error) {
+        console.error('error in frame.copyTo with rgba format:', error);
+        frame.close();
+        window.requestAnimationFrame(() => handle_frame(reader));
+        return;
+      }
+
+      frame_input(new Uint8Array(pixelBuffer), frame.displayWidth, frame.displayHeight);
+
+      frame.close();
+      window.requestAnimationFrame(() => handle_frame(reader));
+    }
+
+    navigator.mediaDevices.getUserMedia(constraints).then(async function(stream) {
+      video.srcObject = stream;
+      await video.play();
+
+      const [track] = stream.getVideoTracks();
+      const processor = new MediaStreamTrackProcessor(track);
+      const reader = processor.readable.getReader();
+
+      handle_frame(reader);
+    });
   </script>
   <script>
     // disable right-click context menu
@@ -61,6 +116,7 @@
   </style>
   <body>
     <div class="loading"></div>
+    <video id="webcam" class="removed" autoplay></video>
     <canvas id="bevy" class="full-size"></canvas>
   </body>
 </html>
