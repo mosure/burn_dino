@@ -184,6 +184,7 @@ fn to_image<B: Backend>(
 }
 
 
+// TODO: benchmark process_frame
 fn process_frame(
     input: RgbImage,
     dino: Res<DinoModel<Wgpu>>,
