@@ -51,15 +51,8 @@ serde = { version = "1.0", optional = true }
 [dependencies.burn]
 version = "0.15"
 features = [
-  "autodiff",
   "autotune",
-  "dataset",
   "fusion",
-  "metrics",
-  "ndarray",
-  "network",
-  "train",
-  "tui",
   "wgpu",
 ]
 

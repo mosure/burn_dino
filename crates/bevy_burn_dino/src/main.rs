@@ -316,6 +316,39 @@ mod native {
 }
 
 
+#[cfg(feature = "web")]
+mod web {
+    use std::cell::RefCell;
+
+    use image::RgbImage;
+    use wasm_bindgen::prelude::*;
+    pub use web_sys::ImageData;
+
+    thread_local! {
+        static SAMPLE_RECEIVER: RefCell<Option<RgbImage>> = RefCell::new(None);
+    }
+
+    #[wasm_bindgen]
+    pub fn frame_input(js_image_data: ImageData) {
+        // Get the dimensions of the image
+        let width = js_image_data.width() as u32;
+        let height = js_image_data.height() as u32;
+
+        // Get the raw pixel data
+        let data = js_image_data.data();
+
+        // Convert the raw data into an RgbImage
+        let rgb_image = RgbImage::from_raw(width, height, data.to_vec())
+            .expect("failed to create RgbImage");
+
+        // Store the image in the global receiver
+        SAMPLE_RECEIVER.with(|receiver| {
+            *receiver.borrow_mut() = Some(rgb_image);
+        });
+    }
+}
+
+
 #[derive(Resource)]
 struct DinoModel<B: Backend> {
     config: DinoVisionTransformerConfig,
@@ -360,13 +393,6 @@ fn process_frames(
             images,
         );
     }
-}
-
-
-// TODO: web-sys ffi
-#[cfg(feature = "web")]
-fn frame_input() {
-
 }
 
 

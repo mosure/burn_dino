@@ -29,7 +29,7 @@ perftest = []
 [dependencies]
 # bevy_args = "1.6"
 bevy_args = { git = "https://github.com/mosure/bevy_args.git", branch = "burn" }
-burn_dino = { path = "../../" }
+burn_dino = { path = "../../", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 futures-intrusive = "0.5"
 image = { version = "0.25.2", default-features = false, features = ["png"] }
