@@ -9,7 +9,7 @@
 [![crates.io](https://img.shields.io/crates/v/burn_dino.svg)](https://crates.io/crates/burn_dino)
 
 
-burn [dinov2](https://arxiv.org/abs/2304.07193) model, view the [live demo]()
+burn [dinov2](https://arxiv.org/abs/2304.07193) model, view the [live demo](https://mosure.github.io/burn_dino/)
 
 | input               | fg pca               |
 |-----------------------|-----------------------|
