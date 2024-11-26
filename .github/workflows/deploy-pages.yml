@@ -53,5 +53,5 @@ jobs:
       - name: deploy to github pages
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: ./www
+          folder: ./crates/bevy_burn_dino/www
           branch: www
