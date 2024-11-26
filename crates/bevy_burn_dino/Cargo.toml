@@ -31,6 +31,7 @@ perftest = []
 bevy_args = { git = "https://github.com/mosure/bevy_args.git", branch = "burn" }
 burn_dino = { path = "../../", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
+futures = "0.3"
 futures-intrusive = "0.5"
 image = { version = "0.25.2", default-features = false, features = ["png"] }
 nokhwa = { version = "0.10", features = ["input-native", "output-threaded"], optional = true }
@@ -51,8 +52,11 @@ features = [
   "bevy_text",
   "bevy_ui",
   "bevy_winit",
+  "custom_cursor",
   "default_font",
   "png",
+  # "webgpu",
+  "x11",
 ]
 
 [dependencies.burn]
@@ -82,5 +86,5 @@ features = [
 
 
 [[bin]]
-name = "ui"
+name = "bevy_burn_dino"
 path = "src/main.rs"

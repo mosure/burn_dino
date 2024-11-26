@@ -35,8 +35,14 @@ jobs:
       - name: install wasm-bindgen-cli
         run: cargo install wasm-bindgen-cli
 
+      # - name: install wasm-opt
+      #   run: cargo install wasm-opt --locked
+
       - name: build wasm artifacts
         run: cargo build -p bevy_burn_dino --target wasm32-unknown-unknown --release --no-default-features --features "web"
+
+      # - name: optimize wasm artifacts
+      #   run: wasm-opt -O -ol 100 -s 100 -o ./target/wasm32-unknown-unknown/release/bevy_burn_dino_opt.wasm ./target/wasm32-unknown-unknown/release/bevy_burn_dino.wasm
 
       - name: generate bindings with wasm-bindgen
         run: wasm-bindgen --out-dir ./crates/bevy_burn_dino/www/out/ --target web ./target/wasm32-unknown-unknown/release/bevy_burn_dino.wasm

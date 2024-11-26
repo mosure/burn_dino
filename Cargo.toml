@@ -91,15 +91,19 @@ opt-level = 3
 opt-level = 1
 
 [profile.release]
+strip = "symbols"
 lto = "thin"
 codegen-units = 1
 opt-level = 3
+panic = "abort"
 
 [profile.wasm-release]
+strip = "symbols"
 inherits = "release"
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
+panic = "abort"
 
 
 [lib]

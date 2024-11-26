@@ -30,9 +30,10 @@ use bevy_args::{
 };
 use burn::{
     prelude::*,
-    backend::wgpu::Wgpu,
+    backend::wgpu::{init_async, AutoGraphicsApi, Wgpu},
     record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
 };
+use futures::executor::block_on;
 use image::{
     DynamicImage,
     ImageBuffer,
@@ -326,23 +327,19 @@ mod web {
     pub use web_sys::ImageData;
 
     thread_local! {
-        static SAMPLE_RECEIVER: RefCell<Option<RgbImage>> = RefCell::new(None);
+        pub static SAMPLE_RECEIVER: RefCell<Option<RgbImage>> = RefCell::new(None);
     }
 
     #[wasm_bindgen]
     pub fn frame_input(js_image_data: ImageData) {
-        // Get the dimensions of the image
         let width = js_image_data.width() as u32;
         let height = js_image_data.height() as u32;
 
-        // Get the raw pixel data
         let data = js_image_data.data();
 
-        // Convert the raw data into an RgbImage
         let rgb_image = RgbImage::from_raw(width, height, data.to_vec())
             .expect("failed to create RgbImage");
 
-        // Store the image in the global receiver
         SAMPLE_RECEIVER.with(|receiver| {
             *receiver.borrow_mut() = Some(rgb_image);
         });
@@ -396,6 +393,28 @@ fn process_frames(
     }
 }
 
+#[cfg(feature = "web")]
+fn process_frames(
+    dino_model: Res<DinoModel<Wgpu>>,
+    pca_transform: Res<PcaTransformModel<Wgpu>>,
+    pca_features_handle: Res<PcaFeatures>,
+    images: ResMut<Assets<Image>>,
+) {
+    web::SAMPLE_RECEIVER.with(|receiver| {
+        let mut receiver = receiver.borrow_mut();
+
+        if let Some(image) = receiver.take() {
+            process_frame(
+                image,
+                dino_model,
+                pca_transform,
+                &pca_features_handle.image,
+                images,
+            );
+        }
+    });
+}
+
 
 fn setup_ui(
     mut commands: Commands,
@@ -424,20 +443,6 @@ fn setup_ui(
         ..default()
     })
         .with_children(|builder| {
-            // TODO: view input
-            // builder.spawn(ImageBundle {
-            //     style: Style {
-            //         width: Val::Percent(100.0),
-            //         height: Val::Percent(100.0),
-            //         ..default()
-            //     },
-            //     image: UiImage {
-            //         texture: foreground,
-            //         ..default()
-            //     },
-            //     ..default()
-            // });
-
             builder.spawn(UiImage {
                 image: pca_image.image.clone(),
                 image_mode: NodeImageMode::Stretch,
@@ -454,13 +459,15 @@ pub fn viewer_app() -> App {
     let mut app = App::new();
     app.insert_resource(args.clone());
 
+    let title = "bevy_burn_dino".to_string();
+
     #[cfg(target_arch = "wasm32")]
     let primary_window = Some(Window {
         // fit_canvas_to_parent: true,
         canvas: Some("#bevy".to_string()),
         mode: bevy::window::WindowMode::Windowed,
         prevent_default_event_handling: true,
-        title: args.name.clone(),
+        title,
 
         #[cfg(feature = "perftest")]
         present_mode: bevy::window::PresentMode::AutoNoVsync,
@@ -475,7 +482,7 @@ pub fn viewer_app() -> App {
         mode: bevy::window::WindowMode::Windowed,
         prevent_default_event_handling: false,
         resolution: (1024.0, 1024.0).into(),
-        title: "bevy_burn_dino".to_string(),
+        title,
 
         #[cfg(feature = "perftest")]
         present_mode: bevy::window::PresentMode::AutoNoVsync,
@@ -582,18 +589,28 @@ fn fps_update_system(
 }
 
 fn run_app() {
+    log("running app...");
+
     // TODO: move model load to startup/async task
     let device = Default::default();
+    block_on(init_async::<AutoGraphicsApi>(&device, Default::default()));
+
+    log("device created");
+
     let config = DinoVisionTransformerConfig {
         ..DinoVisionTransformerConfig::vits(None, None)  // TODO: supply image size fron config
     };
     let dino = load_model::<Wgpu>(&config, &device);
+
+    log("dino model loaded");
 
     let pca_config = PcaTransformConfig::new(
         config.embedding_dimension,
         3,
     );
     let pca_transform = load_pca_model::<Wgpu>(&pca_config, &device);
+
+    log("pca model loaded");
 
     let mut app = viewer_app();
 
@@ -610,7 +627,23 @@ fn run_app() {
     app.add_systems(Startup, setup_ui);
     app.add_systems(Update, process_frames);
 
+    log("running bevy app...");
+
     app.run();
+}
+
+
+pub fn log(_msg: &str) {
+    #[cfg(debug_assertions)]
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::console::log_1(&_msg.into());
+    }
+    #[cfg(debug_assertions)]
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        println!("{}", _msg);
+    }
 }
 
 
@@ -618,6 +651,12 @@ fn main() {
     #[cfg(feature = "native")]
     {
         std::thread::spawn(native::native_camera_thread);
+    }
+
+    #[cfg(debug_assertions)]
+    #[cfg(target_arch = "wasm32")]
+    {
+        console_error_panic_hook::set_once();
     }
 
     run_app();
