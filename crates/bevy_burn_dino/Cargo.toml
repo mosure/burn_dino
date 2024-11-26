@@ -21,9 +21,14 @@ default = ["native"]
 native = ["nokhwa"]
 web = []
 
+editor = []
+perftest = []
+
+
 
 [dependencies]
-bevy_args = "1.5"
+# bevy_args = "1.6"
+bevy_args = { git = "https://github.com/mosure/bevy_args.git", branch = "burn" }
 burn_dino = { path = "../../" }
 clap = { version = "4.5", features = ["derive"] }
 futures-intrusive = "0.5"
@@ -32,15 +37,18 @@ nokhwa = { version = "0.10", features = ["input-native", "output-threaded"], opt
 once_cell = "1.19"
 serde = "1.0"
 
-# TODO: burn currently uses wgpu 22, bevy 0.15 uses wgpu 23
 
-
+# TODO: ideally, bevy and burn synchronize wgpu versions upstream
 [dependencies.bevy]
-version = "0.14"
+# version = "0.14"
+git = "https://github.com/mosure/bevy.git"
+branch = "burn"
 default-features = false
 features = [
   "bevy_asset",
+  "bevy_color",
   "bevy_render",
+  "bevy_text",
   "bevy_ui",
   "bevy_winit",
   "default_font",
@@ -50,15 +58,8 @@ features = [
 [dependencies.burn]
 version = "0.15"
 features = [
-  "autodiff",
   "autotune",
-  "dataset",
   "fusion",
-  "metrics",
-  "ndarray",
-  "network",
-  "train",
-  "tui",
   "wgpu",
 ]
 

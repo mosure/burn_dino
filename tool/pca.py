@@ -32,16 +32,17 @@ transform = transforms.Compose([
     ),
 ])
 
+prefix = 'person'
 images = [
-    './assets/images/dino_0.png',
-    './assets/images/dino_1.png',
-    './assets/images/dino_2.png',
-    './assets/images/dino_3.png',
+    f'./assets/images/{prefix}_0.png',
+    f'./assets/images/{prefix}_1.png',
+    f'./assets/images/{prefix}_2.png',
+    f'./assets/images/{prefix}_3.png',
 ]
 
 inputs = []
 for image_path in images:
-    image = Image.open(image_path)
+    image = Image.open(image_path).convert('RGB')
     input = transform(image).unsqueeze(0).cuda()
     inputs.append(input)
 
@@ -75,24 +76,25 @@ print('pca_features:', pca_features.shape)
 print('pca_features_pre_min_max:', pca_features_pre_min_max.shape)
 
 # TODO: export expected transform input shape
-save_file(
-    {
-        'components': components,
-        'dino_output': collapsed_output,
-        'input': input,
-        'mean': mean,
-        'pca_features': pca_features,
-        'pca_features_pre_min_max': pca_features_pre_min_max,
-    },
-    './assets/tensors/dino_pca.st',
-)
-torch.save(PcaModel(components, mean).state_dict(), './assets/models/dino_pca.pth')
+# save_file(
+#     {
+#         'components': components,
+#         'dino_output': collapsed_output,
+#         'input': input,
+#         'mean': mean,
+#         'pca_features': pca_features,
+#         'pca_features_pre_min_max': pca_features_pre_min_max,
+#     },
+#     './assets/tensors/dino_pca.st',
+# )
+torch.save(PcaModel(components, mean).state_dict(), f'./assets/models/{prefix}_pca.pth')
 
 
-pca_features_bg = pca_features[:, 0] > 0.35
+pca_features_bg = pca_features[:, 0] > 0.5
 pca_features_fg = ~pca_features_bg
 
 fg_features = collapsed_output[pca_features_fg]
+
 pca_fg.fit(fg_features)
 pca_features_left = pca_fg.transform(fg_features)
 
@@ -104,6 +106,7 @@ pca_features_left = pca_fg.transform(fg_features)
 #     },
 #     './assets/tensors/dino_fg_pca.st',
 # )
+torch.save(PcaModel(pca_fg.components_, pca_fg.mean_).state_dict(), f'./assets/models/{prefix}_fg_pca.pth')
 
 
 for i in range(3):
@@ -126,4 +129,4 @@ for i in range(pca_features_rgb.shape[0]):
     image = transforms.ToPILImage()(pca_features_rgb[i])
     image = image.resize((1024, 1024), resample=Image.LANCZOS)
 
-    image.save(f'./assets/pca/dino_{i}_pca.png')
+    image.save(f'./assets/pca/{prefix}_{i}_pca.png')

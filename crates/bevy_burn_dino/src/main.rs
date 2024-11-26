@@ -1,21 +1,29 @@
-// TODO: mpsc channel to trigger inference
-// TODO: javascript bindings for image input
 use std::sync::{Arc, Mutex};
 
 use bevy::{
     prelude::*,
+    color::palettes::css::GOLD,
+    diagnostic::{
+        DiagnosticsStore,
+        FrameTimeDiagnosticsPlugin,
+    },
     render::{
         render_asset::RenderAssetUsages,
         render_resource::{
             Extent3d,
-            TextureDescriptor,
             TextureDimension,
             TextureFormat,
-            TextureUsages,
         },
+        settings::{
+            RenderCreation,
+            WgpuFeatures,
+            WgpuSettings,
+        },
+        RenderPlugin,
     },
 };
 use bevy_args::{
+    parse_args,
     Deserialize,
     Parser,
     Serialize,
@@ -27,6 +35,8 @@ use burn::{
 };
 use image::{
     DynamicImage,
+    ImageBuffer,
+    Rgb,
     RgbImage,
     RgbaImage,
 };
@@ -46,23 +56,48 @@ use burn_dino::model::{
 
 
 #[derive(
+    Resource,
     Clone,
     Debug,
-    Default,
     Serialize,
     Deserialize,
     Parser,
+    Reflect,
 )]
+#[reflect(Resource)]
 #[command(about = "burn_dino import", version, long_about = None)]
 pub struct DinoImportConfig {
     #[arg(long, default_value = "true")]
     pub pca_only: bool,
+
+    #[arg(long, default_value = "true")]
+    pub press_esc_to_close: bool,
+
+    #[arg(long, default_value = "true")]
+    pub show_fps: bool,
+
+    #[arg(long, default_value = "518")]
+    pub inference_height: usize,
+
+    #[arg(long, default_value = "518")]
+    pub inference_width: usize,
+}
+
+impl Default for DinoImportConfig {
+    fn default() -> Self {
+        Self {
+            pca_only: true,
+            press_esc_to_close: true,
+            show_fps: true,
+            inference_height: 518,
+            inference_width: 518,
+        }
+    }
 }
 
 
-
 static DINO_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/dinov2.mpk");
-static PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/pca.mpk");
+static PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/person_pca.mpk");
 
 
 fn load_model<B: Backend>(
@@ -110,20 +145,14 @@ fn preprocess_image<B: Backend>(
     device: &B::Device,
 ) -> Tensor<B, 4> {
     let img = DynamicImage::ImageRgb8(image)
-        .resize_exact(config.image_size as u32, config.image_size as u32, image::imageops::FilterType::Lanczos3);
+        .resize_exact(config.image_size as u32, config.image_size as u32, image::imageops::FilterType::Triangle)
+        .to_rgb32f();
 
-    let img = match img {
-        DynamicImage::ImageRgb8(img) => img,
-        _ => img.to_rgb8(),
-    };
-
-    let img_data: Vec<f32> = img
-        .pixels()
-        .flat_map(|p| p.0.iter().map(|&c| c as f32 / 255.0))
-        .collect();
+    let samples = img.as_flat_samples();
+    let floats: &[f32] = samples.as_slice();
 
     let input: Tensor<B, 1> = Tensor::from_floats(
-        img_data.as_slice(),
+        floats,
         device,
     );
 
@@ -135,40 +164,35 @@ fn preprocess_image<B: Backend>(
 
 
 fn to_image<B: Backend>(
-    images: Tensor<B, 4>,
+    image: Tensor<B, 4>,
     upsample_height: u32,
     upsample_width: u32,
 ) -> RgbaImage {
-    let height = images.shape().dims[1];
-    let width = images.shape().dims[2];
-    let channels = images.shape().dims[3];
+    let height = image.shape().dims[1];
+    let width = image.shape().dims[2];
 
-    let image_size = height * width * channels;
-
-    let images = images.clamp(0.0, 1.0).mul_scalar(255.0);
-    let images = images.to_data().to_vec::<f32>().unwrap();
-
-    let image_slice = &images[0..image_size];
-    let image_slice_u8: Vec<u8> = image_slice.iter().map(|&v| v as u8).collect();
-
-    let img = RgbImage::from_raw(
+    let image = image.to_data().to_vec::<f32>().unwrap();
+    let image = ImageBuffer::<Rgb<f32>, Vec<f32>>::from_raw(
         width as u32,
         height as u32,
-        image_slice_u8,
+        image,
     ).unwrap();
 
-    let img = DynamicImage::ImageRgb8(img)
-        .resize_exact(upsample_width, upsample_height, image::imageops::FilterType::Lanczos3);
-
-    img.to_rgba8()
+    DynamicImage::ImageRgb32F(image)
+        .resize_exact(upsample_width, upsample_height, image::imageops::FilterType::Triangle)
+        .to_rgba8()
 }
 
 
 fn process_frame(
     input: RgbImage,
     dino: Res<DinoModel<Wgpu>>,
-) -> Image {
+    pca_transform: Res<PcaTransformModel<Wgpu>>,
+    image_handle: &Handle<Image>,
+    mut images: ResMut<Assets<Image>>,
+) {
     let input_tensor: Tensor<Wgpu, 4> = preprocess_image(input, &dino.config, &dino.device);
+
     let model = dino.model.lock().unwrap();
     let dino_features = model.forward(input_tensor.clone(), None).x_norm_patchtokens;
 
@@ -178,15 +202,9 @@ fn process_frame(
     let n_samples = batch * elements;
     let spatial_size = elements.isqrt();
 
-    // TODO: pad x to expected pca input size
     let x = dino_features.reshape([n_samples, embedding_dim]);
 
-    let pca_config = PcaTransformConfig::new(
-        batch,
-        embedding_dim,
-        3,
-    );
-    let pca_transform = load_pca_model(&pca_config, &dino.device);
+    let pca_transform = pca_transform.model.lock().unwrap();
     let mut pca_features = pca_transform.forward(x.clone());
 
     // pca min-max scaling
@@ -203,35 +221,16 @@ fn process_frame(
     }
 
     let pca_features = pca_features.reshape([batch, spatial_size, spatial_size, 3]);
+
     let pca_features = to_image(
         pca_features,
         dino.config.image_size as u32,
         dino.config.image_size as u32,
     );
 
-    let size = Extent3d {
-        width: dino.config.image_size as u32,
-        height: dino.config.image_size as u32,
-        depth_or_array_layers: 1,
-    };
-
-    Image {
-        data: pca_features.to_vec(),
-        texture_descriptor: TextureDescriptor {
-            label: None,
-            size,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8UnormSrgb,
-            mip_level_count: 1,
-            sample_count: 1,
-            usage: TextureUsages::COPY_SRC
-                 | TextureUsages::COPY_DST
-                 | TextureUsages::TEXTURE_BINDING
-                 | TextureUsages::STORAGE_BINDING,
-            view_formats: &[],
-        },
-        ..Default::default()
-    }
+    // TODO: share wgpu io between bevy/burn
+    let existing_image = images.get_mut(image_handle).unwrap();
+    existing_image.data = pca_features.into_raw();
 }
 
 
@@ -324,6 +323,12 @@ struct DinoModel<B: Backend> {
     model: Arc::<Mutex::<DinoVisionTransformer<B>>>,
 }
 
+#[derive(Resource)]
+struct PcaTransformModel<B: Backend> {
+    model: Arc::<Mutex::<PcaTransform<B>>>,
+}
+
+
 #[derive(Resource, Default)]
 struct PcaFeatures {
     image: Handle<Image>,
@@ -332,26 +337,38 @@ struct PcaFeatures {
 #[cfg(feature = "native")]
 fn process_frames(
     dino_model: Res<DinoModel<Wgpu>>,
+    pca_transform: Res<PcaTransformModel<Wgpu>>,
     pca_features_handle: Res<PcaFeatures>,
-    mut images: ResMut<Assets<Image>>,
+    images: ResMut<Assets<Image>>,
 ) {
     let receiver = native::SAMPLE_RECEIVER.get().unwrap();
-    let receiver = receiver.lock().unwrap();
+    let mut last_image = None;
 
-    if receiver.try_recv().is_ok() {
-        // TODO: share wgpu io between bevy/burn
-        let image = receiver.recv().unwrap();
-        let image = process_frame(image, dino_model);
+    {
+        let receiver = receiver.lock().unwrap();
+        while let Ok(image) = receiver.try_recv() {
+            last_image = Some(image);
+        }
+    }
 
-        images.insert(&pca_features_handle.image, image);
+    if let Some(image) = last_image {
+        process_frame(
+            image,
+            dino_model,
+            pca_transform,
+            &pca_features_handle.image,
+            images,
+        );
     }
 }
+
 
 // TODO: web-sys ffi
 #[cfg(feature = "web")]
 fn frame_input() {
 
 }
+
 
 fn setup_ui(
     mut commands: Commands,
@@ -366,21 +383,17 @@ fn setup_ui(
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        &[0],
+        &[0, 0, 0, 0],
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::all(),
     ));
 
-    commands.spawn(NodeBundle {
-        style: Style {
-            display: Display::Grid,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            grid_template_columns: RepeatedGridTrack::flex(1, 1.0),
-            grid_template_rows: RepeatedGridTrack::flex(1, 1.0),
-            ..default()
-        },
-        background_color: BackgroundColor(Color::BLACK),
+    commands.spawn(Node {
+        display: Display::Grid,
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        grid_template_columns: RepeatedGridTrack::flex(1, 1.0),
+        grid_template_rows: RepeatedGridTrack::flex(1, 1.0),
         ..default()
     })
         .with_children(|builder| {
@@ -398,36 +411,173 @@ fn setup_ui(
             //     ..default()
             // });
 
-            builder.spawn(ImageBundle {
-                style: Style {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    ..default()
-                },
-                image: UiImage {
-                    texture: pca_image.image.clone(),
-                    ..default()
-                },
+            builder.spawn(UiImage {
+                image: pca_image.image.clone(),
+                image_mode: NodeImageMode::Stretch,
                 ..default()
             });
         });
+
+    commands.spawn(Camera2d::default());
+}
+
+pub fn viewer_app() -> App {
+    let args = parse_args::<DinoImportConfig>();
+
+    let mut app = App::new();
+    app.insert_resource(args.clone());
+
+    #[cfg(target_arch = "wasm32")]
+    let primary_window = Some(Window {
+        // fit_canvas_to_parent: true,
+        canvas: Some("#bevy".to_string()),
+        mode: bevy::window::WindowMode::Windowed,
+        prevent_default_event_handling: true,
+        title: args.name.clone(),
+
+        #[cfg(feature = "perftest")]
+        present_mode: bevy::window::PresentMode::AutoNoVsync,
+        #[cfg(not(feature = "perftest"))]
+        present_mode: bevy::window::PresentMode::AutoVsync,
+
+        ..default()
+    });
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let primary_window = Some(Window {
+        mode: bevy::window::WindowMode::Windowed,
+        prevent_default_event_handling: false,
+        resolution: (1024.0, 1024.0).into(),
+        title: "bevy_burn_dino".to_string(),
+
+        #[cfg(feature = "perftest")]
+        present_mode: bevy::window::PresentMode::AutoNoVsync,
+        #[cfg(not(feature = "perftest"))]
+        present_mode: bevy::window::PresentMode::AutoVsync,
+
+        ..default()
+    });
+
+    app.insert_resource(ClearColor(Color::srgba(0.0, 0.0, 0.0, 0.0)));
+
+
+    let default_plugins = DefaultPlugins
+        .set(ImagePlugin::default_nearest())
+        .set(RenderPlugin {
+            render_creation: RenderCreation::Automatic(WgpuSettings {
+                features: WgpuFeatures::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                        | WgpuFeatures::SHADER_F16,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .set(WindowPlugin {
+            primary_window,
+            ..default()
+        });
+
+    app.add_plugins(default_plugins);
+
+    #[cfg(feature = "editor")]
+    if args.editor {
+        app.register_type::<BevyZeroverseConfig>();
+        app.add_plugins(WorldInspectorPlugin::new());
+    }
+
+    // TODO: add viewer configs
+    if args.press_esc_to_close {
+        app.add_systems(Update, press_esc_close);
+    }
+
+    if args.show_fps {
+        app.add_plugins(FrameTimeDiagnosticsPlugin);
+        app.add_systems(Startup, fps_display_setup);
+        app.add_systems(Update, fps_update_system);
+    }
+
+    app
+}
+
+fn press_esc_close(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut exit: EventWriter<AppExit>
+) {
+    if keys.just_pressed(KeyCode::Escape) {
+        exit.send(AppExit::Success);
+    }
+}
+
+fn fps_display_setup(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+) {
+    commands.spawn((
+        Text("fps: ".to_string()),
+        TextFont {
+            font: asset_server.load("fonts/Caveat-Bold.ttf"),
+            font_size: 60.0,
+            ..Default::default()
+        },
+        TextColor(Color::WHITE),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(5.0),
+            left: Val::Px(15.0),
+            ..default()
+        },
+        ZIndex(2),
+    )).with_child((
+        FpsText,
+        TextColor(Color::Srgba(GOLD)),
+        TextFont {
+            font: asset_server.load("fonts/Caveat-Bold.ttf"),
+            font_size: 60.0,
+            ..Default::default()
+        },
+        TextSpan::default(),
+    ));
+}
+
+#[derive(Component)]
+struct FpsText;
+
+fn fps_update_system(
+    diagnostics: Res<DiagnosticsStore>,
+    mut query: Query<&mut TextSpan, With<FpsText>>,
+) {
+    for mut text in &mut query {
+        if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
+            if let Some(value) = fps.smoothed() {
+                **text = format!("{value:.2}");
+            }
+        }
+    }
 }
 
 fn run_app() {
     // TODO: move model load to startup/async task
     let device = Default::default();
     let config = DinoVisionTransformerConfig {
-        ..DinoVisionTransformerConfig::vits(None, None)
+        ..DinoVisionTransformerConfig::vits(None, None)  // TODO: supply image size fron config
     };
     let dino = load_model::<Wgpu>(&config, &device);
 
-    let mut app = App::new();
+    let pca_config = PcaTransformConfig::new(
+        config.embedding_dimension,
+        3,
+    );
+    let pca_transform = load_pca_model::<Wgpu>(&pca_config, &device);
+
+    let mut app = viewer_app();
 
     app.init_resource::<PcaFeatures>();
     app.insert_resource(DinoModel {
         config,
-        device,
+        device: device,
         model: Arc::new(Mutex::new(dino)),
+    });
+    app.insert_resource(PcaTransformModel {
+        model: Arc::new(Mutex::new(pca_transform)),
     });
 
     app.add_systems(Startup, setup_ui);

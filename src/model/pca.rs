@@ -7,7 +7,6 @@ use burn::{
 
 #[derive(Config)]
 pub struct PcaTransformConfig {
-    pub batch_size: usize,
     pub input_dim: usize,
     pub output_dim: usize,
 
@@ -17,7 +16,7 @@ pub struct PcaTransformConfig {
 
 impl Default for PcaTransformConfig {
     fn default() -> Self {
-        Self::new(4, 384, 3)
+        Self::new(384, 3)
     }
 }
 

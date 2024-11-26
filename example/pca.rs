@@ -168,7 +168,6 @@ fn main() {
     let x = dino_features.reshape([n_samples, embedding_dim]);
 
     let pca_config = PcaTransformConfig::new(
-        batch,
         embedding_dim,
         3,
     );
