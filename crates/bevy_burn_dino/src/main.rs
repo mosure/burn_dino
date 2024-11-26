@@ -33,7 +33,6 @@ use bevy_args::{
 use burn::{
     prelude::*,
     backend::wgpu::{init_async, AutoGraphicsApi, Wgpu},
-    record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
 };
 use image::{
     DynamicImage,
@@ -98,33 +97,139 @@ impl Default for DinoImportConfig {
 }
 
 
-static DINO_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/dinov2.mpk");
-static PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/person_pca.mpk");
+#[cfg(feature = "native")]
+mod io {
+    use burn::{
+        prelude::*,
+        record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
+    };
+    use burn_dino::model::{
+        dino::{
+            DinoVisionTransformer,
+            DinoVisionTransformerConfig,
+        },
+        pca::{
+            PcaTransform, PcaTransformConfig
+        },
+    };
 
+    static DINO_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/dinov2.mpk");
+    static PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/person_pca.mpk");
 
-fn load_model<B: Backend>(
-    config: &DinoVisionTransformerConfig,
-    device: &B::Device,
-) -> DinoVisionTransformer<B> {
-    let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-        .load(DINO_STATE_ENCODED.to_vec(), &Default::default())
-        .expect("failed to decode state");
+    pub async fn load_model<B: Backend>(
+        config: &DinoVisionTransformerConfig,
+        device: &B::Device,
+    ) -> DinoVisionTransformer<B> {
+        let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
+            .load(DINO_STATE_ENCODED.to_vec(), &Default::default())
+            .expect("failed to decode state");
 
-    let model= config.init(device);
-    model.load_record(record)
+        let model= config.init(device);
+        model.load_record(record)
+    }
+
+    pub async fn load_pca_model<B: Backend>(
+        config: &PcaTransformConfig,
+        device: &B::Device,
+    ) -> PcaTransform<B> {
+        let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
+            .load(PCA_STATE_ENCODED.to_vec(), &Default::default())
+            .expect("failed to decode state");
+
+        let model= config.init(device);
+        model.load_record(record)
+    }
 }
 
-fn load_pca_model<B: Backend>(
-    config: &PcaTransformConfig,
-    device: &B::Device,
-) -> PcaTransform<B> {
-    let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-        .load(PCA_STATE_ENCODED.to_vec(), &Default::default())
-        .expect("failed to decode state");
+#[cfg(feature = "web")]
+mod io {
+    use burn::{
+        prelude::*,
+        record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
+    };
+    use burn_dino::model::{
+        dino::{
+            DinoVisionTransformer,
+            DinoVisionTransformerConfig,
+        },
+        pca::{
+            PcaTransform, PcaTransformConfig
+        },
+    };
+    use js_sys::Uint8Array;
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
+    use web_sys::{
+        window,
+        Request,
+        RequestInit,
+        RequestMode,
+        Response,
+    };
 
-    let model= config.init(device);
-    model.load_record(record)
+    pub async fn load_model<B: Backend>(
+        config: &DinoVisionTransformerConfig,
+        device: &B::Device,
+    ) -> DinoVisionTransformer<B> {
+        let opts = RequestInit::new();
+        opts.set_method("GET");
+        opts.set_mode(RequestMode::Cors);
+
+        let request = Request::new_with_str_and_init(
+            "./assets/models/dinov2.mpk",
+            &opts,
+        ).unwrap();
+
+        let window = window().unwrap();
+        let resp_value = JsFuture::from(window.fetch_with_request(&request)).await;
+        let resp: Response = resp_value.unwrap().dyn_into().unwrap();
+
+        let array_buffer = JsFuture::from(resp.array_buffer().expect("failed to download model weights")).await.unwrap();
+        let uint8_array = Uint8Array::new(&array_buffer);
+
+        let mut data = vec![0; uint8_array.length() as usize];
+        uint8_array.copy_to(&mut data[..]);
+
+        let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
+            .load(data, &Default::default())
+            .expect("failed to decode state");
+
+        let model= config.init(device);
+        model.load_record(record)
+    }
+
+    pub async fn load_pca_model<B: Backend>(
+        config: &PcaTransformConfig,
+        device: &B::Device,
+    ) -> PcaTransform<B> {
+        let opts = RequestInit::new();
+        opts.set_method("GET");
+        opts.set_mode(RequestMode::Cors);
+
+        let request = Request::new_with_str_and_init(
+            "./assets/models/person_pca.mpk",
+            &opts,
+        ).unwrap();
+
+        let window = window().unwrap();
+        let resp_value = JsFuture::from(window.fetch_with_request(&request)).await;
+        let resp: Response = resp_value.unwrap().dyn_into().unwrap();
+
+        let array_buffer = JsFuture::from(resp.array_buffer().expect("failed to download pca weights")).await.unwrap();
+        let uint8_array = Uint8Array::new(&array_buffer);
+
+        let mut data = vec![0; uint8_array.length() as usize];
+        uint8_array.copy_to(&mut data[..]);
+
+        let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
+            .load(data, &Default::default())
+            .expect("failed to decode state");
+
+        let model= config.init(device);
+        model.load_record(record)
+    }
 }
+
 
 
 fn normalize<B: Backend>(
@@ -648,7 +753,7 @@ async fn run_app() {
     let config = DinoVisionTransformerConfig {
         ..DinoVisionTransformerConfig::vits(None, None)  // TODO: supply image size fron config
     };
-    let dino = load_model::<Wgpu>(&config, &device);
+    let dino = io::load_model::<Wgpu>(&config, &device).await;
 
     log("dino model loaded");
 
@@ -656,7 +761,7 @@ async fn run_app() {
         config.embedding_dimension,
         3,
     );
-    let pca_transform = load_pca_model::<Wgpu>(&pca_config, &device);
+    let pca_transform = io::load_pca_model::<Wgpu>(&pca_config, &device).await;
 
     log("pca model loaded");
 

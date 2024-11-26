@@ -16,6 +16,7 @@ Cargo.lock
 screenshots/
 headless_output/
 www/assets/
+crates/bevy_burn_dino/assets/
 crates/bevy_burn_dino/www/assets/
 
 assets/images/
