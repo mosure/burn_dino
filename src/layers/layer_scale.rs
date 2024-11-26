@@ -18,7 +18,7 @@ impl Default for LayerScaleConfig {
 
 impl LayerScaleConfig {
     pub fn init<B: Backend, const D: usize>(&self, device: &B::Device) -> LayerScale<B, D> {
-        LayerScale::new(device, &self)
+        LayerScale::new(device, self)
     }
 }
 

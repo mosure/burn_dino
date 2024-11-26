@@ -18,7 +18,7 @@ impl Default for LayerNormConfig {
 
 impl LayerNormConfig {
     pub fn init<B: Backend>(&self, device: &B::Device) -> LayerNorm<B> {
-        LayerNorm::new(device, &self)
+        LayerNorm::new(device, self)
     }
 }
 

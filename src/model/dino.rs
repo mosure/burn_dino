@@ -75,7 +75,6 @@ impl DinoVisionTransformerConfig {
                 },
                 layer_scale: LayerScaleConfig {
                     dim,
-                    ..Default::default()
                 }.into(),
                 ..Default::default()
             },
@@ -100,7 +99,6 @@ impl DinoVisionTransformerConfig {
                 },
                 layer_scale: LayerScaleConfig {
                     dim: embedding_dimension,
-                    ..Default::default()
                 }.into(),
                 ..Default::default()
             },
@@ -125,7 +123,6 @@ impl DinoVisionTransformerConfig {
                 },
                 layer_scale: LayerScaleConfig {
                     dim: embedding_dimension,
-                    ..Default::default()
                 }.into(),
                 ..Default::default()
             },
@@ -146,7 +143,6 @@ impl DinoVisionTransformerConfig {
                 },
                 layer_scale: LayerScaleConfig {
                     dim: embedding_dimension,
-                    ..Default::default()
                 }.into(),
                 ..Default::default()
             },
@@ -273,13 +269,13 @@ impl<B: Backend> DinoVisionTransformer<B> {
             patch_pos_embed.reshape([1, M, M, dim]).permute([0, 3, 1, 2]),
         ).permute([0, 2, 3, 1]).reshape([1_i32, -1, dim as i32]);
 
-        return Tensor::cat(
+        Tensor::cat(
             vec![
                 class_pos_embed.unsqueeze_dim(0),
                 patch_pos_embed,
             ],
             1,
-        );
+        )
     }
 
     #[allow(non_snake_case)]
@@ -304,9 +300,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
         );
 
         let residual = self.interpolate_pos_encoding(x.clone(), W, H);
-        let x = x + residual.clone();
-
-        x
+        x + residual.clone()
     }
 
     #[allow(non_snake_case)]
@@ -367,7 +361,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             x_norm_clstoken,
             x_norm_patchtokens,
             x_prenorm: x,
-            masks: masks.into(),
+            masks,
         }
     }
 }

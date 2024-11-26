@@ -37,6 +37,8 @@ resolver = "2"
 
 [features]
 default = ["import"]
+
+benchmark = ["burn/autotune", "burn/fusion"]
 import = ["bevy_args", "burn-import", "clap", "serde"]
 
 
@@ -50,17 +52,39 @@ serde = { version = "1.0", optional = true }
 
 [dependencies.burn]
 version = "0.15"
+default-features = false
 features = [
-  "autodiff",
-  "autotune",
-  "dataset",
-  "fusion",
-  "metrics",
-  "ndarray",
-  "network",
-  "train",
-  "tui",
+  # "autotune",
+  # "fusion",
+  "std",
   "wgpu",
+]
+
+[dependencies.burn-wgpu]
+version = "0.15"
+default-features = false
+features = [
+  "fusion",
+  "std",
+  # "template",
+]
+
+[dependencies.cubecl]
+version = "0.3"
+default-features = false
+features = [
+  "linalg",
+  "std",
+  # "template",
+]
+
+[dependencies.cubecl-runtime]
+version = "0.3"
+default-features = false
+features = [
+  "std",
+  "channel-mpsc",
+  # "template",
 ]
 
 
@@ -98,15 +122,19 @@ opt-level = 3
 opt-level = 1
 
 [profile.release]
+strip = "symbols"
 lto = "thin"
 codegen-units = 1
 opt-level = 3
+panic = "abort"
 
 [profile.wasm-release]
+strip = "symbols"
 inherits = "release"
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
+panic = "abort"
 
 
 [lib]

@@ -81,7 +81,7 @@ impl<B: Backend> Attention<B> {
         }
     }
 
-    #[allow(non_snake_case)]
+    #[allow(non_snake_case, clippy::single_range_in_vec_init)]
     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
         let [B, N, C] = x.shape().dims();
 
@@ -108,8 +108,6 @@ impl<B: Backend> Attention<B> {
             .reshape([B, N, C]);
 
         let x = self.proj.forward(x);
-        let x = self.proj_drop.forward(x);
-
-        x
+        self.proj_drop.forward(x)
     }
 }

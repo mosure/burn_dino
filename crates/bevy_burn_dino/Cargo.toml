@@ -18,7 +18,7 @@ categories = [
 [features]
 default = ["native"]
 
-native = ["nokhwa"]
+native = ["burn/autotune", "futures", "nokhwa"]
 web = []
 
 editor = []
@@ -29,8 +29,9 @@ perftest = []
 [dependencies]
 # bevy_args = "1.6"
 bevy_args = { git = "https://github.com/mosure/bevy_args.git", branch = "burn" }
-burn_dino = { path = "../../" }
+burn_dino = { path = "../../", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
+futures = { version = "0.3", optional = true }
 futures-intrusive = "0.5"
 image = { version = "0.25.2", default-features = false, features = ["png"] }
 nokhwa = { version = "0.10", features = ["input-native", "output-threaded"], optional = true }
@@ -51,15 +52,21 @@ features = [
   "bevy_text",
   "bevy_ui",
   "bevy_winit",
+  "custom_cursor",
   "default_font",
   "png",
+  # "webgpu",
+  "x11",
 ]
 
 [dependencies.burn]
 version = "0.15"
+default-features = false
 features = [
-  "autotune",
-  "fusion",
+  # "autotune",
+  # "fusion",
+  "std",
+  # "template",
   "wgpu",
 ]
 
@@ -67,6 +74,7 @@ features = [
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 
 
 [dependencies.web-sys]
@@ -82,5 +90,5 @@ features = [
 
 
 [[bin]]
-name = "ui"
+name = "bevy_burn_dino"
 path = "src/main.rs"

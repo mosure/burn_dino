@@ -68,7 +68,7 @@ impl<B: Backend> Block<B> {
         // self.ls1 = LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
         // self.drop_path1 = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         let ls1 = if let Some(layer_scale_config) = &config.layer_scale {
-            layer_scale_config.init::<B, 3>(&device).into()
+            layer_scale_config.init::<B, 3>(device).into()
         } else {
             None
         };
@@ -82,7 +82,7 @@ impl<B: Backend> Block<B> {
             .init::<B, 3>(device);
 
         let ls2 = if let Some(layer_scale_config) = &config.layer_scale {
-            layer_scale_config.init::<B, 3>(&device).into()
+            layer_scale_config.init::<B, 3>(device).into()
         } else {
             None
         };
