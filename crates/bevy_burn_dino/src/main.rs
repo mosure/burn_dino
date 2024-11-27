@@ -4,8 +4,12 @@ use bevy::{
     prelude::*,
     color::palettes::css::GOLD,
     diagnostic::{
+        Diagnostic,
+        DiagnosticPath,
+        Diagnostics,
         DiagnosticsStore,
         FrameTimeDiagnosticsPlugin,
+        RegisterDiagnostic,
     },
     ecs::{system::SystemState, world::CommandQueue},
     render::{
@@ -21,8 +25,12 @@ use bevy::{
             WgpuSettings,
         },
         RenderPlugin,
+    }, tasks::{
+        block_on,
+        futures_lite::future,
+        AsyncComputeTaskPool,
+        Task,
     },
-    tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task},
 };
 use bevy_args::{
     parse_args,
@@ -74,7 +82,7 @@ pub struct DinoImportConfig {
     #[arg(long, default_value = "true")]
     pub press_esc_to_close: bool,
 
-    #[arg(long, default_value = "false")]
+    #[arg(long, default_value = "true")]
     pub show_fps: bool,
 
     #[arg(long, default_value = "518")]
@@ -89,7 +97,7 @@ impl Default for DinoImportConfig {
         Self {
             pca_only: true,
             press_esc_to_close: true,
-            show_fps: false,  // TODO: display inference fps (UI fps is decoupled via async compute pool)
+            show_fps: true,  // TODO: display inference fps (UI fps is decoupled via async compute pool)
             inference_height: 518,
             inference_width: 518,
         }
@@ -561,9 +569,22 @@ fn process_frames(
     }
 }
 
-fn handle_tasks(mut commands: Commands, mut transform_tasks: Query<&mut ProcessImage>) {
+fn handle_tasks(
+    mut commands: Commands,
+    mut diagnostics: Diagnostics,
+    mut last_frame: Local<Time<Real>>,
+    mut transform_tasks: Query<&mut ProcessImage>,
+) {
     for mut task in &mut transform_tasks {
         if let Some(mut commands_queue) = block_on(future::poll_once(&mut task.0)) {
+            if let Some(last_instant) = last_frame.last_update() {
+                let delta_seconds = last_instant.elapsed().as_secs_f64();
+                if delta_seconds > 0.0 {
+                    diagnostics.add_measurement(&INFERENCE_FPS, || 1.0 / delta_seconds);
+                }
+            }
+            last_frame.update();
+
             commands.append(&mut commands_queue);
         }
     }
@@ -679,6 +700,7 @@ pub fn viewer_app() -> App {
 
     if args.show_fps {
         app.add_plugins(FrameTimeDiagnosticsPlugin);
+        app.register_diagnostic(Diagnostic::new(INFERENCE_FPS));
         app.add_systems(Startup, fps_display_setup);
         app.add_systems(Update, fps_update_system);
     }
@@ -694,6 +716,9 @@ fn press_esc_close(
         exit.send(AppExit::Success);
     }
 }
+
+
+const INFERENCE_FPS: DiagnosticPath = DiagnosticPath::const_new("inference_fps");
 
 fn fps_display_setup(
     mut commands: Commands,
@@ -734,7 +759,7 @@ fn fps_update_system(
     mut query: Query<&mut TextSpan, With<FpsText>>,
 ) {
     for mut text in &mut query {
-        if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
+        if let Some(fps) = diagnostics.get(&INFERENCE_FPS) {
             if let Some(value) = fps.smoothed() {
                 **text = format!("{value:.2}");
             }
