@@ -32,12 +32,14 @@ transform = transforms.Compose([
     ),
 ])
 
-prefix = 'person'
+prefix = 'face'
 images = [
-    f'./assets/images/{prefix}_0.png',
-    f'./assets/images/{prefix}_1.png',
-    f'./assets/images/{prefix}_2.png',
-    f'./assets/images/{prefix}_3.png',
+    f'./assets/images/{prefix}_0.webp',
+    f'./assets/images/{prefix}_1.webp',
+    f'./assets/images/{prefix}_2.webp',
+    f'./assets/images/{prefix}_3.webp',
+    f'./assets/images/{prefix}_4.webp',
+    f'./assets/images/{prefix}_5.webp',
 ]
 
 inputs = []

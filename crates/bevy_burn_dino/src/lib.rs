@@ -17,6 +17,8 @@ use burn_dino::model::{
     pca::PcaTransform,
 };
 
+pub mod platform;
+
 
 fn normalize<B: Backend>(
     input: Tensor<B, 4>,
