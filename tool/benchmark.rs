@@ -40,7 +40,7 @@ fn inference_benchmark(c: &mut Criterion) {
                 let model = config.init(&device);
                 let input: Tensor<Wgpu, 4> = Tensor::zeros([1, config.input_channels, config.image_size, config.image_size], &device);
 
-                b.iter(|| model.forward(input.clone(), None));
+                b.iter(|| model.forward(input.clone(), None).x_norm_patchtokens.to_data());
             },
         );
     }

@@ -80,7 +80,7 @@ fn main() {
 
 
     // import safetensors -> mpk for PCA components, check if weights exist
-    let pca_weights = "./assets/models/dino_pca.pth";
+    let pca_weights = "./assets/models/face_pca.pth";
     let load_args = LoadArgs::new(pca_weights.into())
         .with_debug_print();
 

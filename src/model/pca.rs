@@ -9,9 +9,6 @@ use burn::{
 pub struct PcaTransformConfig {
     pub input_dim: usize,
     pub output_dim: usize,
-
-    #[config(default = "Initializer::Constant{value:1e-5}")]
-    pub initializer: Initializer,
 }
 
 impl Default for PcaTransformConfig {
@@ -27,9 +24,43 @@ impl PcaTransformConfig {
 }
 
 
+
+// mod linalg {
+//     use burn::{
+//         prelude::*,
+//         backend::ndarray::{NdArray, NdArrayTensor},
+//         tensor::TensorPrimitive,
+//     };
+//     use ndarray::{ArrayBase, Dim, IxDynImpl, OwnedRepr};
+
+//     pub fn tensor_to_array<B: Backend, const D: usize>(
+//         tensor: Tensor<B, D>,
+//     ) -> ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>> {
+//         let arr = Tensor::<NdArray, D>::from_data(tensor.into_data(), &Default::default());
+//         let primitive: NdArrayTensor<f32> = arr.into_primitive().tensor();
+//         primitive.array.to_owned()
+//     }
+
+//     pub fn array_to_tensor<B: Backend, const D: usize>(
+//         array: ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>,
+//         device: &B::Device,
+//     ) -> Tensor<B, D> {
+//         let primitive: NdArrayTensor<f32> = NdArrayTensor::new(array.into());
+//         let arr = Tensor::<NdArray, D>::from_primitive(TensorPrimitive::Float(primitive));
+//         Tensor::<B, D>::from_data(arr.into_data(), device)
+//     }
+
+//     pub fn svd(
+//         x: ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>>,
+//     ) -> ArrayBase<OwnedRepr<f32>, Dim<IxDynImpl>> {
+//         let (u, s, vt) = x.svd(true, true).unwrap();
+//         u.dot(&s.diag()).dot(&vt)
+//     }
+// }
+
+
 #[derive(Module, Debug)]
 pub struct PcaTransform<B: Backend> {
-    // pub auxillary_features: Param<Tensor<B, 2>>,
     pub components: Param<Tensor<B, 2>>,
     pub mean: Param<Tensor<B, 2>>,
 }
@@ -39,26 +70,28 @@ impl<B: Backend> PcaTransform<B> {
         device: &B::Device,
         config: &PcaTransformConfig,
     ) -> Self {
-        // let auxillary_features = config.initializer.init([config.batch_size - 1, config.input_dim], device);
-        let components = config.initializer.init([config.output_dim, config.input_dim], device);
-        let mean = config.initializer.init([1, config.input_dim], device);
+        let components = Initializer::Ones.init([config.output_dim, config.input_dim], device);
+        let mean = Initializer::Zeros.init([1, config.input_dim], device);
 
         Self {
-            // auxillary_features,
             components,
             mean,
         }
     }
 
-    pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
-        // let input_batch = Tensor::cat(
-        //     vec![x, self.auxillary_features.val()],
-        //     0,
-        // );
-
+    pub fn forward(
+        &self,
+        x: Tensor<B, 2>,
+    ) -> Tensor<B, 2> {
         let transformed = x.matmul(self.components.val().transpose());
         transformed - self.mean.val().matmul(self.components.val().transpose())
-
-        // TODO: remove the auxillary features
     }
+
+    // pub fn rolling_fit(
+    //     &mut self,
+    //     x: Tensor<B, 2>,
+    //     threshold: f32,
+    // ) {
+
+    // }
 }

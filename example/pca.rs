@@ -24,7 +24,7 @@ use burn_dino::model::{
 
 
 static DINO_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/dinov2.mpk");
-static PCA_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/pca.mpk");
+static PCA_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/face_pca.mpk");
 
 static INPUT_IMAGE_0: &[u8] = include_bytes!("../assets/images/dino_0.png");
 static INPUT_IMAGE_1: &[u8] = include_bytes!("../assets/images/dino_1.png");

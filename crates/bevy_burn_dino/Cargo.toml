@@ -94,6 +94,9 @@ features = [
 ]
 
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "bevy_burn_dino"
 path = "src/main.rs"

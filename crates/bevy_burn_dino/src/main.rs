@@ -37,17 +37,11 @@ use bevy_args::{
     Deserialize,
     Parser,
     Serialize,
+    ValueEnum,
 };
 use burn::{
     prelude::*,
     backend::wgpu::{init_async, AutoGraphicsApi, Wgpu},
-};
-use image::{
-    DynamicImage,
-    ImageBuffer,
-    Rgb,
-    RgbImage,
-    RgbaImage,
 };
 
 use burn_dino::model::{
@@ -60,8 +54,42 @@ use burn_dino::model::{
     },
 };
 
+use bevy_burn_dino::{
+    platform::camera::{
+        receive_image,
+        self,
+    },
+    process_frame,
+};
 
-// TODO: support multiple PCA heads with args/inspector switching
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Reflect,
+    ValueEnum,
+)]
+pub enum PcaType {
+    Adaptive,  // TODO: window adaptive pca
+    #[default]
+    Face,
+    Person,
+}
+
+impl PcaType {
+    #[allow(dead_code)]
+    const fn pca_weights_mpk(&self) -> &'static str {
+        match self {
+            PcaType::Adaptive => "adaptive_pca.mpk",
+            PcaType::Face => "face_pca.mpk",
+            PcaType::Person => "person_pca.mpk",
+        }
+    }
+}
 
 
 #[derive(
@@ -74,11 +102,8 @@ use burn_dino::model::{
     Reflect,
 )]
 #[reflect(Resource)]
-#[command(about = "burn_dino import", version, long_about = None)]
-pub struct DinoImportConfig {
-    #[arg(long, default_value = "true")]
-    pub pca_only: bool,
-
+#[command(about = "bevy_burn_dino", version, long_about = None)]
+pub struct BevyBurnDinoConfig {
     #[arg(long, default_value = "true")]
     pub press_esc_to_close: bool,
 
@@ -90,16 +115,19 @@ pub struct DinoImportConfig {
 
     #[arg(long, default_value = "518")]
     pub inference_width: usize,
+
+    #[arg(long, value_enum, default_value_t = PcaType::Face)]
+    pub pca_type: PcaType,
 }
 
-impl Default for DinoImportConfig {
+impl Default for BevyBurnDinoConfig {
     fn default() -> Self {
         Self {
-            pca_only: true,
             press_esc_to_close: true,
             show_fps: true,  // TODO: display inference fps (UI fps is decoupled via async compute pool)
             inference_height: 518,
             inference_width: 518,
+            pca_type: PcaType::default(),
         }
     }
 }
@@ -120,9 +148,11 @@ mod io {
             PcaTransform, PcaTransformConfig
         },
     };
+    use super::PcaType;
 
     static DINO_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/dinov2.mpk");
-    static PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/person_pca.mpk");
+    static FACE_PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/face_pca.mpk");
+    static PERSON_PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/person_pca.mpk");
 
     pub async fn load_model<B: Backend>(
         config: &DinoVisionTransformerConfig,
@@ -138,10 +168,17 @@ mod io {
 
     pub async fn load_pca_model<B: Backend>(
         config: &PcaTransformConfig,
+        pca_type: PcaType,
         device: &B::Device,
     ) -> PcaTransform<B> {
+        let data = match pca_type {
+            PcaType::Adaptive => unimplemented!(),
+            PcaType::Face => FACE_PCA_STATE_ENCODED,
+            PcaType::Person => PERSON_PCA_STATE_ENCODED,
+        };
+
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(PCA_STATE_ENCODED.to_vec(), &Default::default())
+            .load(data.to_vec(), &Default::default())
             .expect("failed to decode state");
 
         let model= config.init(device);
@@ -208,6 +245,7 @@ mod io {
 
     pub async fn load_pca_model<B: Backend>(
         config: &PcaTransformConfig,
+        pca_type: PcaType,
         device: &B::Device,
     ) -> PcaTransform<B> {
         let opts = RequestInit::new();
@@ -215,7 +253,7 @@ mod io {
         opts.set_mode(RequestMode::Cors);
 
         let request = Request::new_with_str_and_init(
-            "./assets/models/person_pca.mpk",
+            "./assets/models/" + pca_type.pca_weights_mpk(),
             &opts,
         ).unwrap();
 
@@ -235,236 +273,6 @@ mod io {
 
         let model= config.init(device);
         model.load_record(record)
-    }
-}
-
-
-
-fn normalize<B: Backend>(
-    input: Tensor<B, 4>,
-    device: &B::Device,
-) -> Tensor<B, 4> {
-    let mean: Tensor<B, 1> = Tensor::from_floats([0.485, 0.456, 0.406], device);
-    let std: Tensor<B, 1> = Tensor::from_floats([0.229, 0.224, 0.225], device);
-
-    input
-        .permute([0, 2, 3, 1])
-        .sub(mean.unsqueeze())
-        .div(std.unsqueeze())
-        .permute([0, 3, 1, 2])
-}
-
-fn preprocess_image<B: Backend>(
-    image: RgbImage,
-    config: &DinoVisionTransformerConfig,
-    device: &B::Device,
-) -> Tensor<B, 4> {
-    let img = DynamicImage::ImageRgb8(image)
-        .resize_exact(config.image_size as u32, config.image_size as u32, image::imageops::FilterType::Triangle)
-        .to_rgb32f();
-
-    let samples = img.as_flat_samples();
-    let floats: &[f32] = samples.as_slice();
-
-    let input: Tensor<B, 1> = Tensor::from_floats(
-        floats,
-        device,
-    );
-
-    let input = input.reshape([1, config.image_size, config.image_size, config.input_channels])
-        .permute([0, 3, 1, 2]);
-
-    normalize(input, device)
-}
-
-
-async fn to_image<B: Backend>(
-    image: Tensor<B, 4>,
-    upsample_height: u32,
-    upsample_width: u32,
-) -> RgbaImage {
-    let height = image.shape().dims[1];
-    let width = image.shape().dims[2];
-
-    let image = image.to_data_async().await.to_vec::<f32>().unwrap();
-    let image = ImageBuffer::<Rgb<f32>, Vec<f32>>::from_raw(
-        width as u32,
-        height as u32,
-        image,
-    ).unwrap();
-
-    DynamicImage::ImageRgb32F(image)
-        .resize_exact(upsample_width, upsample_height, image::imageops::FilterType::Triangle)
-        .to_rgba8()
-}
-
-
-// TODO: benchmark process_frame
-async fn process_frame<B: Backend>(
-    input: RgbImage,
-    dino_config: DinoVisionTransformerConfig,
-    dino_model: Arc<Mutex<DinoVisionTransformer<B>>>,
-    pca_model: Arc<Mutex<PcaTransform<B>>>,
-    device: B::Device,
-) -> Vec<u8> {
-    let input_tensor: Tensor<B, 4> = preprocess_image(input, &dino_config, &device);
-
-    let dino_features = {
-        let model = dino_model.lock().unwrap();
-        model.forward(input_tensor.clone(), None).x_norm_patchtokens
-    };
-
-    let batch = dino_features.shape().dims[0];
-    let elements = dino_features.shape().dims[1];
-    let embedding_dim = dino_features.shape().dims[2];
-    let n_samples = batch * elements;
-    let spatial_size = elements.isqrt();
-
-    let x = dino_features.reshape([n_samples, embedding_dim]);
-
-    let mut pca_features = {
-        let pca_transform = pca_model.lock().unwrap();
-        pca_transform.forward(x.clone())
-    };
-
-    // pca min-max scaling
-    for i in 0..3 {
-        let slice = pca_features.clone().slice([0..n_samples, i..i+1]);
-        let slice_min = slice.clone().min();
-        let slice_max = slice.clone().max();
-        let scaled = slice
-            .sub(slice_min.clone().unsqueeze())
-            .div((slice_max - slice_min).unsqueeze());
-
-        pca_features = pca_features.slice_assign(
-            [0..n_samples, i..i+1],
-            scaled,
-        );
-    }
-
-    let pca_features = pca_features.reshape([batch, spatial_size, spatial_size, 3]);
-
-    let pca_features = to_image(
-        pca_features,
-        dino_config.image_size as u32,
-        dino_config.image_size as u32,
-    ).await;
-
-    pca_features.into_raw()
-}
-
-
-#[cfg(feature = "native")]
-mod native {
-    use std::sync::{
-        Arc,
-        Mutex,
-        mpsc::{
-            self,
-            Sender,
-            SyncSender,
-            Receiver,
-            TryRecvError,
-        },
-    };
-
-    use image::RgbImage;
-    use nokhwa::{
-        nokhwa_initialize,
-        query,
-        CallbackCamera,
-        pixel_format::RgbFormat,
-        utils::{
-            ApiBackend,
-            RequestedFormat,
-            RequestedFormatType,
-        },
-    };
-    use once_cell::sync::OnceCell;
-
-    pub static SAMPLE_RECEIVER: OnceCell<Arc<Mutex<Receiver<RgbImage>>>> = OnceCell::new();
-    pub static SAMPLE_SENDER: OnceCell<SyncSender<RgbImage>> = OnceCell::new();
-
-    pub static APP_RUN_RECEIVER: OnceCell<Arc<Mutex<Receiver<()>>>> = OnceCell::new();
-    pub static APP_RUN_SENDER: OnceCell<Sender<()>> = OnceCell::new();
-
-    pub fn native_camera_thread() {
-        let (
-            sample_sender,
-            sample_receiver,
-        ) = mpsc::sync_channel(1);
-        SAMPLE_RECEIVER.set(Arc::new(Mutex::new(sample_receiver))).unwrap();
-        SAMPLE_SENDER.set(sample_sender).unwrap();
-
-        let (
-            app_run_sender,
-            app_run_receiver,
-        ) = mpsc::channel();
-        APP_RUN_RECEIVER.set(Arc::new(Mutex::new(app_run_receiver))).unwrap();
-        APP_RUN_SENDER.set(app_run_sender).unwrap();
-
-        nokhwa_initialize(|granted| {
-            if !granted {
-                panic!("failed to initialize camera");
-            }
-        });
-
-        let devices = query(ApiBackend::Auto).unwrap();
-        let index = devices.first().unwrap().index();
-
-        let format = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
-        let mut camera = CallbackCamera::new(index.clone(), format, |buffer| {
-            let image = buffer.decode_image::<RgbFormat>().unwrap();
-            let sender = SAMPLE_SENDER.get().unwrap();
-            sender.send(image).unwrap();
-        }).unwrap();
-
-        camera.open_stream().unwrap();
-
-        loop {
-            camera.poll_frame().unwrap();
-
-            let receiver = APP_RUN_RECEIVER.get().unwrap();
-            match receiver.lock().unwrap().try_recv() {
-                Ok(_) => break,
-                Err(TryRecvError::Empty) => continue,
-                Err(TryRecvError::Disconnected) => break,
-            };
-        }
-
-        camera.stop_stream().unwrap();
-    }
-}
-
-
-#[cfg(feature = "web")]
-mod web {
-    use std::cell::RefCell;
-
-    use image::{
-        DynamicImage,
-        RgbImage,
-        RgbaImage,
-    };
-    use wasm_bindgen::prelude::*;
-
-    thread_local! {
-        pub static SAMPLE_RECEIVER: RefCell<Option<RgbImage>> = RefCell::new(None);
-    }
-
-    #[wasm_bindgen]
-    pub fn frame_input(pixel_data: &[u8], width: u32, height: u32) {
-        let rgba_image = RgbaImage::from_raw(width, height, pixel_data.to_vec())
-            .expect("failed to create RgbImage");
-
-        // TODO: perform video element -> burn's webgpu texture conversion directly
-        // TODO: perform this conversion from tensors
-        let dynamic_image = DynamicImage::ImageRgba8(rgba_image);
-        let rgb_image: RgbImage = dynamic_image.to_rgb8();
-
-        SAMPLE_RECEIVER.with(|receiver| {
-            *receiver.borrow_mut() = Some(rgb_image);
-        });
     }
 }
 
@@ -490,28 +298,6 @@ struct PcaFeatures {
 
 #[derive(Component)]
 struct ProcessImage(Task<CommandQueue>);
-
-#[cfg(feature = "native")]
-fn receive_image() -> Option<RgbImage> {
-    let receiver = native::SAMPLE_RECEIVER.get().unwrap();
-    let mut last_image = None;
-
-    {
-        let receiver = receiver.lock().unwrap();
-        while let Ok(image) = receiver.try_recv() {
-            last_image = Some(image);
-        }
-    }
-
-    last_image
-}
-
-#[cfg(feature = "web")]
-fn receive_image() -> Option<RgbImage> {
-    web::SAMPLE_RECEIVER.with(|receiver| {
-        receiver.borrow_mut().take()
-    })
-}
 
 fn process_frames(
     mut commands: Commands,
@@ -628,9 +414,7 @@ fn setup_ui(
     commands.spawn(Camera2d);
 }
 
-pub fn viewer_app() -> App {
-    let args = parse_args::<DinoImportConfig>();
-
+pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
     let mut app = App::new();
     app.insert_resource(args.clone());
 
@@ -770,6 +554,9 @@ fn fps_update_system(
 async fn run_app() {
     log("running app...");
 
+    let args = parse_args::<BevyBurnDinoConfig>();
+    log(&format!("{:?}", args));
+
     let device = Default::default();
     init_async::<AutoGraphicsApi>(&device, Default::default()).await;
 
@@ -782,15 +569,20 @@ async fn run_app() {
 
     log("dino model loaded");
 
+    // TODO: support adaptive PCA
     let pca_config = PcaTransformConfig::new(
         config.embedding_dimension,
         3,
     );
-    let pca_transform = io::load_pca_model::<Wgpu>(&pca_config, &device).await;
+    let pca_transform = io::load_pca_model::<Wgpu>(
+        &pca_config,
+        args.pca_type.clone(),
+        &device,
+    ).await;
 
     log("pca model loaded");
 
-    let mut app = viewer_app();
+    let mut app = viewer_app(args);
 
     app.init_resource::<PcaFeatures>();
     app.insert_resource(DinoModel {
@@ -834,7 +626,7 @@ pub fn log(_msg: &str) {
 fn main() {
     #[cfg(feature = "native")]
     {
-        std::thread::spawn(native::native_camera_thread);
+        std::thread::spawn(camera::native_camera_thread);
         futures::executor::block_on(run_app());
     }
 
