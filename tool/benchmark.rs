@@ -26,7 +26,7 @@ fn inference_benchmark(c: &mut Criterion) {
         (DinoVisionTransformerConfig::vits(None, None), "vits"),
         (DinoVisionTransformerConfig::vitb(None, None), "vitb"),
         (DinoVisionTransformerConfig::vitl(None, None), "vitl"),
-        (DinoVisionTransformerConfig::vitg(None, None), "vitg"),
+        // (DinoVisionTransformerConfig::vitg(None, None), "vitg"),
     ];
 
     let mut group = c.benchmark_group("burn_dinov2_inference");

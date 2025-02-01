@@ -55,10 +55,7 @@ use burn_dino::model::{
 };
 
 use bevy_burn_dino::{
-    platform::camera::{
-        receive_image,
-        self,
-    },
+    platform::camera::receive_image,
     process_frame,
 };
 
@@ -245,7 +242,7 @@ mod io {
 
     pub async fn load_pca_model<B: Backend>(
         config: &PcaTransformConfig,
-        pca_type: PcaType,
+        pca_type: super::PcaType,
         device: &B::Device,
     ) -> PcaTransform<B> {
         let opts = RequestInit::new();
@@ -253,7 +250,7 @@ mod io {
         opts.set_mode(RequestMode::Cors);
 
         let request = Request::new_with_str_and_init(
-            "./assets/models/" + pca_type.pca_weights_mpk(),
+            &format!("./assets/models/{}", pca_type.pca_weights_mpk()),
             &opts,
         ).unwrap();
 
@@ -626,7 +623,7 @@ pub fn log(_msg: &str) {
 fn main() {
     #[cfg(feature = "native")]
     {
-        std::thread::spawn(camera::native_camera_thread);
+        std::thread::spawn(bevy_burn_dino::platform::camera::native_camera_thread);
         futures::executor::block_on(run_app());
     }
 
