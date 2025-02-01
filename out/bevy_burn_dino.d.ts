@@ -1,10 +1,5 @@
 /* tslint:disable */
 /* eslint-disable */
-/**
- * @param {Uint8Array} pixel_data
- * @param {number} width
- * @param {number} height
- */
 export function frame_input(pixel_data: Uint8Array, width: number, height: number): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -13,17 +8,17 @@ export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly frame_input: (a: number, b: number, c: number, d: number) => void;
   readonly main: (a: number, b: number) => number;
-  readonly __wbindgen_export_0: (a: number, b: number) => number;
-  readonly __wbindgen_export_1: (a: number, b: number, c: number, d: number) => number;
-  readonly __wbindgen_export_2: WebAssembly.Table;
+  readonly __wbindgen_export_0: (a: number) => void;
+  readonly __wbindgen_export_1: (a: number, b: number) => number;
+  readonly __wbindgen_export_2: (a: number, b: number, c: number, d: number) => number;
   readonly __wbindgen_export_3: (a: number, b: number, c: number) => void;
-  readonly __wbindgen_export_4: (a: number, b: number, c: number) => void;
+  readonly __wbindgen_export_4: WebAssembly.Table;
   readonly __wbindgen_export_5: (a: number, b: number, c: number) => void;
   readonly __wbindgen_export_6: (a: number, b: number, c: number) => void;
-  readonly __wbindgen_export_7: (a: number, b: number) => void;
-  readonly __wbindgen_export_8: (a: number, b: number, c: number, d: number) => void;
-  readonly __wbindgen_export_9: (a: number, b: number, c: number) => void;
-  readonly __wbindgen_export_10: (a: number) => void;
+  readonly __wbindgen_export_7: (a: number, b: number, c: number) => void;
+  readonly __wbindgen_export_8: (a: number, b: number, c: number) => void;
+  readonly __wbindgen_export_9: (a: number, b: number, c: number, d: number) => void;
+  readonly __wbindgen_export_10: (a: number, b: number) => void;
   readonly __wbindgen_start: () => void;
 }
 
