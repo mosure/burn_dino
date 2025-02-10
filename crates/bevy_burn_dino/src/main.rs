@@ -8,7 +8,7 @@ use bevy::{
         DiagnosticPath,
         Diagnostics,
         DiagnosticsStore,
-        FrameTimeDiagnosticsPlugin,
+        // FrameTimeDiagnosticsPlugin,
         RegisterDiagnostic,
     },
     ecs::{system::SystemState, world::CommandQueue},
@@ -25,12 +25,14 @@ use bevy::{
             WgpuSettings,
         },
         RenderPlugin,
-    }, tasks::{
+    },
+    tasks::{
         block_on,
         futures_lite::future,
         AsyncComputeTaskPool,
         Task,
     },
+    ui::widget::NodeImageMode,
 };
 use bevy_args::{
     parse_args,
@@ -41,7 +43,7 @@ use bevy_args::{
 };
 use burn::{
     prelude::*,
-    backend::wgpu::{init_async, AutoGraphicsApi, Wgpu},
+    backend::wgpu::{init_setup_async, AutoGraphicsApi, Wgpu},
 };
 
 use burn_dino::model::{
@@ -401,7 +403,7 @@ fn setup_ui(
         ..default()
     })
         .with_children(|builder| {
-            builder.spawn(UiImage {
+            builder.spawn(ImageNode {
                 image: pca_image.image.clone(),
                 image_mode: NodeImageMode::Stretch,
                 ..default()
@@ -480,7 +482,7 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
     }
 
     if args.show_fps {
-        app.add_plugins(FrameTimeDiagnosticsPlugin);
+        // app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         app.register_diagnostic(Diagnostic::new(INFERENCE_FPS));
         app.add_systems(Startup, fps_display_setup);
         app.add_systems(Update, fps_update_system);
@@ -555,7 +557,7 @@ async fn run_app() {
     log(&format!("{:?}", args));
 
     let device = Default::default();
-    init_async::<AutoGraphicsApi>(&device, Default::default()).await;
+    init_setup_async::<AutoGraphicsApi>(&device, Default::default()).await;
 
     log("device created");
 

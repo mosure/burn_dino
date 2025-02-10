@@ -41,9 +41,9 @@ serde = "1.0"
 
 # TODO: ideally, bevy and burn synchronize wgpu versions upstream
 [dependencies.bevy]
-# version = "0.14"
+# version = "0.16"
 git = "https://github.com/mosure/bevy.git"
-branch = "burn"
+rev = "669d139c13f6b44652f38131a5c9d20ca54e024d"
 default-features = false
 features = [
   "bevy_asset",
@@ -60,11 +60,12 @@ features = [
 ]
 
 [dependencies.burn]
-version = "0.15"
-default-features = false
+version = "0.16"
+default-features = true
 features = [
   # "autotune",
-  # "fusion",
+  "fusion",
+  "ndarray",
   "std",
   # "template",
   "wgpu",
