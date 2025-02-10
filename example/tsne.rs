@@ -10,7 +10,6 @@ use image::{
     RgbImage,
 };
 use bhtsne::tSNE;
-use ndarray::Array2;
 
 use burn_dino::model::dino::{
     DinoVisionTransformer,
@@ -34,7 +33,7 @@ pub fn load_model<B: Backend>(
         .load(STATE_ENCODED.to_vec(), &Default::default())
         .expect("failed to decode state");
 
-    let model= config.init(device);
+    let model = config.init(device);
     model.load_record(record)
 }
 
@@ -53,6 +52,7 @@ fn normalize<B: Backend>(
         .permute([0, 3, 1, 2])
 }
 
+
 pub fn load_image<B: Backend>(
     bytes: &[u8],
     config: &DinoVisionTransformerConfig,
@@ -60,7 +60,11 @@ pub fn load_image<B: Backend>(
 ) -> Tensor<B, 4> {
     let img = load_from_memory_with_format(bytes, ImageFormat::Png)
         .unwrap()
-        .resize_exact(config.image_size as u32, config.image_size as u32, image::imageops::FilterType::Lanczos3);
+        .resize_exact(
+            config.image_size as u32,
+            config.image_size as u32,
+            image::imageops::FilterType::Lanczos3,
+        );
 
     let img = match img {
         DynamicImage::ImageRgb8(img) => img,
@@ -72,12 +76,13 @@ pub fn load_image<B: Backend>(
         .flat_map(|p| p.0.iter().map(|&c| c as f32 / 255.0))
         .collect();
 
-    let input: Tensor<B, 1> = Tensor::from_floats(
-        img_data.as_slice(),
-        device,
-    );
-
-    let input = input.reshape([1, config.input_channels, config.image_size, config.image_size]);
+    let input: Tensor<B, 1> = Tensor::from_floats(img_data.as_slice(), device);
+    let input = input.reshape([
+        1,
+        config.input_channels,
+        config.image_size,
+        config.image_size,
+    ]);
 
     normalize(input, device)
 }
@@ -90,7 +95,12 @@ fn main() {
     };
     let dino = load_model(&config, &device);
 
-    let input_pngs = vec![INPUT_IMAGE_0, INPUT_IMAGE_1, INPUT_IMAGE_2, INPUT_IMAGE_3];
+    let input_pngs = vec![
+        INPUT_IMAGE_0,
+        INPUT_IMAGE_1,
+        INPUT_IMAGE_2,
+        INPUT_IMAGE_3,
+    ];
 
     let mut input_tensors = Vec::new();
     for input in input_pngs {
@@ -105,57 +115,63 @@ fn main() {
     let elements = output.shape().dims[1];
     let features = output.shape().dims[2];
     let n_samples = batch * elements;
-
     let spatial_size = elements.isqrt();
 
     let x = output.reshape([n_samples, features]);
     let binding = x.to_data()
         .to_vec::<f32>()
         .unwrap();
-    let data: Vec<&[f32]> = binding
-        .chunks(config.embedding_dimension)
-        .collect();
+    let data: Vec<&[f32]> = binding.chunks(config.embedding_dimension).collect();
 
-    let tsne_features = tSNE::new(&data)
+    let mut tsne_features = tSNE::new(&data)
         .embedding_dim(3)
         .perplexity(10.0)
         .epochs(1000)
         .barnes_hut(0.5, |sample_a, sample_b| {
-            sample_a.iter()
+            sample_a
+                .iter()
                 .zip(sample_b.iter())
                 .map(|(a, b)| (a - b).powi(2))
                 .sum::<f32>()
                 .sqrt()
         })
         .embedding();
-    let mut tsne_features = Array2::from_shape_vec((n_samples, 3), tsne_features).unwrap();
 
-    for mut col in tsne_features.columns_mut() {
-        let min = col.fold(f32::INFINITY, |a, &b| a.min(b));
-        let max = col.fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-        let range = max - min;
-        col.mapv_inplace(|x| (x - min) / range);
+    let num_dims = 3;
+    for d in 0..num_dims {
+        let mut min_val = f32::INFINITY;
+        let mut max_val = f32::NEG_INFINITY;
+        for i in 0..n_samples {
+            let idx = i * num_dims + d;
+            let value = tsne_features[idx];
+            if value < min_val {
+                min_val = value;
+            }
+            if value > max_val {
+                max_val = value;
+            }
+        }
+        let range = if max_val - min_val == 0.0 { 1.0 } else { max_val - min_val };
+        for i in 0..n_samples {
+            let idx = i * num_dims + d;
+            tsne_features[idx] = (tsne_features[idx] - min_val) / range;
+        }
     }
 
-    let tsne_features = tsne_features.to_shape([batch, spatial_size, spatial_size, 3]).unwrap();
-
-    for (i, img) in tsne_features.outer_iter().enumerate() {
-        let collected: Vec<u8> = img.iter()
-            .map(|&x| (x * 255.0)
-                .max(0.0)
-                .min(255.0) as u8
-            ).collect();
-        let img = RgbImage::from_raw(
-                spatial_size as u32,
-                spatial_size as u32,
-                collected,
-            )
-            .unwrap();
+    for b in 0..batch {
+        let start = b * spatial_size * spatial_size * num_dims;
+        let end = start + spatial_size * spatial_size * num_dims;
+        let mut collected: Vec<u8> = Vec::with_capacity((spatial_size * spatial_size * 3) as usize);
+        for &value in &tsne_features[start..end] {
+            let pixel = (value * 255.0).max(0.0).min(255.0) as u8;
+            collected.push(pixel);
+        }
 
         let output_directory = std::path::Path::new("output/tsne");
         std::fs::create_dir_all(output_directory).unwrap();
-
-        let output_path = output_directory.join(format!("{}.png", i));
+        let output_path = output_directory.join(format!("{}.png", b));
+        let img = RgbImage::from_raw(spatial_size as u32, spatial_size as u32, collected)
+            .unwrap();
         img.save(output_path).unwrap();
     }
 }
