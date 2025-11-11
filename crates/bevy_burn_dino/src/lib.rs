@@ -1,29 +1,16 @@
 use std::sync::{Arc, Mutex};
 
 use burn::prelude::*;
-use image::{
-    DynamicImage,
-    ImageBuffer,
-    Rgb,
-    RgbImage,
-    RgbaImage,
-};
+use image::{DynamicImage, ImageBuffer, Rgb, RgbImage, RgbaImage};
 
 use burn_dino::model::{
-    dino::{
-        DinoVisionTransformer,
-        DinoVisionTransformerConfig,
-    },
+    dino::{DinoVisionTransformer, DinoVisionTransformerConfig},
     pca::PcaTransform,
 };
 
 pub mod platform;
 
-
-fn normalize<B: Backend>(
-    input: Tensor<B, 4>,
-    device: &B::Device,
-) -> Tensor<B, 4> {
+fn normalize<B: Backend>(input: Tensor<B, 4>, device: &B::Device) -> Tensor<B, 4> {
     let mean: Tensor<B, 1> = Tensor::from_floats([0.485, 0.456, 0.406], device);
     let std: Tensor<B, 1> = Tensor::from_floats([0.229, 0.224, 0.225], device);
 
@@ -40,23 +27,29 @@ fn preprocess_image<B: Backend>(
     device: &B::Device,
 ) -> Tensor<B, 4> {
     let img = DynamicImage::ImageRgb8(image)
-        .resize_exact(config.image_size as u32, config.image_size as u32, image::imageops::FilterType::Triangle)
+        .resize_exact(
+            config.image_size as u32,
+            config.image_size as u32,
+            image::imageops::FilterType::Triangle,
+        )
         .to_rgb32f();
 
     let samples = img.as_flat_samples();
     let floats: &[f32] = samples.as_slice();
 
-    let input: Tensor<B, 1> = Tensor::from_floats(
-        floats,
-        device,
-    );
+    let input: Tensor<B, 1> = Tensor::from_floats(floats, device);
 
-    let input = input.reshape([1, config.image_size, config.image_size, config.input_channels])
+    let input = input
+        .reshape([
+            1,
+            config.image_size,
+            config.image_size,
+            config.input_channels,
+        ])
         .permute([0, 3, 1, 2]);
 
     normalize(input, device)
 }
-
 
 async fn to_image<B: Backend>(
     image: Tensor<B, 4>,
@@ -67,17 +60,17 @@ async fn to_image<B: Backend>(
     let width = image.shape().dims[2];
 
     let image = image.to_data_async().await.to_vec::<f32>().unwrap();
-    let image = ImageBuffer::<Rgb<f32>, Vec<f32>>::from_raw(
-        width as u32,
-        height as u32,
-        image,
-    ).unwrap();
+    let image =
+        ImageBuffer::<Rgb<f32>, Vec<f32>>::from_raw(width as u32, height as u32, image).unwrap();
 
     DynamicImage::ImageRgb32F(image)
-        .resize_exact(upsample_width, upsample_height, image::imageops::FilterType::Triangle)
+        .resize_exact(
+            upsample_width,
+            upsample_height,
+            image::imageops::FilterType::Triangle,
+        )
         .to_rgba8()
 }
-
 
 // TODO: benchmark process_frame
 pub async fn process_frame<B: Backend>(
@@ -109,17 +102,14 @@ pub async fn process_frame<B: Backend>(
 
     // pca min-max scaling
     for i in 0..3 {
-        let slice = pca_features.clone().slice([0..n_samples, i..i+1]);
+        let slice = pca_features.clone().slice([0..n_samples, i..i + 1]);
         let slice_min = slice.clone().min();
         let slice_max = slice.clone().max();
         let scaled = slice
             .sub(slice_min.clone().unsqueeze())
             .div((slice_max - slice_min).unsqueeze());
 
-        pca_features = pca_features.slice_assign(
-            [0..n_samples, i..i+1],
-            scaled,
-        );
+        pca_features = pca_features.slice_assign([0..n_samples, i..i + 1], scaled);
     }
 
     let pca_features = pca_features.reshape([batch, spatial_size, spatial_size, 3]);
@@ -128,7 +118,8 @@ pub async fn process_frame<B: Backend>(
         pca_features,
         dino_config.image_size as u32,
         dino_config.image_size as u32,
-    ).await;
+    )
+    .await;
 
     pca_features.into_raw()
 }

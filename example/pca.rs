@@ -1,27 +1,16 @@
 use std::path::Path;
 
 use burn::{
-    prelude::*,
     backend::wgpu::Wgpu,
+    prelude::*,
     record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
 };
-use image::{
-    load_from_memory_with_format,
-    DynamicImage,
-    ImageFormat,
-    RgbImage,
-};
+use image::{load_from_memory_with_format, DynamicImage, ImageFormat, RgbImage};
 
 use burn_dino::model::{
-    dino::{
-        DinoVisionTransformer,
-        DinoVisionTransformerConfig,
-    },
-    pca::{
-        PcaTransform, PcaTransformConfig
-    },
+    dino::{DinoVisionTransformer, DinoVisionTransformerConfig},
+    pca::{PcaTransform, PcaTransformConfig},
 };
-
 
 static DINO_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/dinov2.mpk");
 static PCA_STATE_ENCODED: &[u8] = include_bytes!("../assets/models/face_pca.mpk");
@@ -31,7 +20,6 @@ static INPUT_IMAGE_1: &[u8] = include_bytes!("../assets/images/dino_1.png");
 static INPUT_IMAGE_2: &[u8] = include_bytes!("../assets/images/dino_2.png");
 static INPUT_IMAGE_3: &[u8] = include_bytes!("../assets/images/dino_3.png");
 
-
 fn load_model<B: Backend>(
     config: &DinoVisionTransformerConfig,
     device: &B::Device,
@@ -40,27 +28,20 @@ fn load_model<B: Backend>(
         .load(DINO_STATE_ENCODED.to_vec(), &Default::default())
         .expect("failed to decode state");
 
-    let model= config.init(device);
+    let model = config.init(device);
     model.load_record(record)
 }
 
-fn load_pca_model<B: Backend>(
-    config: &PcaTransformConfig,
-    device: &B::Device,
-) -> PcaTransform<B> {
+fn load_pca_model<B: Backend>(config: &PcaTransformConfig, device: &B::Device) -> PcaTransform<B> {
     let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
         .load(PCA_STATE_ENCODED.to_vec(), &Default::default())
         .expect("failed to decode state");
 
-    let model= config.init(device);
+    let model = config.init(device);
     model.load_record(record)
 }
 
-
-fn normalize<B: Backend>(
-    input: Tensor<B, 4>,
-    device: &B::Device,
-) -> Tensor<B, 4> {
+fn normalize<B: Backend>(input: Tensor<B, 4>, device: &B::Device) -> Tensor<B, 4> {
     let mean: Tensor<B, 1> = Tensor::from_floats([0.485, 0.456, 0.406], device);
     let std: Tensor<B, 1> = Tensor::from_floats([0.229, 0.224, 0.225], device);
 
@@ -78,7 +59,11 @@ fn load_image<B: Backend>(
 ) -> Tensor<B, 4> {
     let img = load_from_memory_with_format(bytes, ImageFormat::Png)
         .unwrap()
-        .resize_exact(config.image_size as u32, config.image_size as u32, image::imageops::FilterType::Lanczos3);
+        .resize_exact(
+            config.image_size as u32,
+            config.image_size as u32,
+            image::imageops::FilterType::Lanczos3,
+        );
 
     let img = match img {
         DynamicImage::ImageRgb8(img) => img,
@@ -90,17 +75,19 @@ fn load_image<B: Backend>(
         .flat_map(|p| p.0.iter().map(|&c| c as f32 / 255.0))
         .collect();
 
-    let input: Tensor<B, 1> = Tensor::from_floats(
-        img_data.as_slice(),
-        device,
-    );
+    let input: Tensor<B, 1> = Tensor::from_floats(img_data.as_slice(), device);
 
-    let input = input.reshape([1, config.image_size, config.image_size, config.input_channels])
+    let input = input
+        .reshape([
+            1,
+            config.image_size,
+            config.image_size,
+            config.input_channels,
+        ])
         .permute([0, 3, 1, 2]);
 
     normalize(input, device)
 }
-
 
 fn write_images<B: Backend>(
     images: Tensor<B, 4>,
@@ -124,14 +111,13 @@ fn write_images<B: Backend>(
         let image_slice = &images[offset..offset + image_size];
         let image_slice_u8: Vec<u8> = image_slice.iter().map(|&v| v as u8).collect();
 
-        let img = RgbImage::from_raw(
-            width as u32,
-            height as u32,
-            image_slice_u8,
-        ).unwrap();
+        let img = RgbImage::from_raw(width as u32, height as u32, image_slice_u8).unwrap();
 
-        let img = DynamicImage::ImageRgb8(img)
-            .resize_exact(upsample_width, upsample_height, image::imageops::FilterType::Lanczos3);
+        let img = DynamicImage::ImageRgb8(img).resize_exact(
+            upsample_width,
+            upsample_height,
+            image::imageops::FilterType::Lanczos3,
+        );
 
         std::fs::create_dir_all(output_directory).unwrap();
 
@@ -139,7 +125,6 @@ fn write_images<B: Backend>(
         img.save(output_path).unwrap();
     }
 }
-
 
 fn main() {
     let device = Default::default();
@@ -167,24 +152,20 @@ fn main() {
 
     let x = dino_features.reshape([n_samples, embedding_dim]);
 
-    let pca_config = PcaTransformConfig::new(
-        embedding_dim,
-        3,
-    );
+    let pca_config = PcaTransformConfig::new(embedding_dim, 3);
     let pca_transform = load_pca_model(&pca_config, &device);
     let mut pca_features = pca_transform.forward(x.clone());
 
     // pca min-max scaling
     for i in 0..3 {
-        let slice = pca_features.clone().slice([0..n_samples, i..i+1]);
+        let slice = pca_features.clone().slice([0..n_samples, i..i + 1]);
         let slice_min = slice.clone().min().into_scalar();
         let slice_max = slice.clone().max().into_scalar();
-        let scaled = slice.sub_scalar(slice_min).div_scalar(slice_max - slice_min);
+        let scaled = slice
+            .sub_scalar(slice_min)
+            .div_scalar(slice_max - slice_min);
 
-        pca_features = pca_features.slice_assign(
-            [0..n_samples, i..i+1],
-            scaled,
-        );
+        pca_features = pca_features.slice_assign([0..n_samples, i..i + 1], scaled);
     }
 
     let pca_features = pca_features.reshape([batch, spatial_size, spatial_size, 3]);

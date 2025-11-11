@@ -1,29 +1,17 @@
-
 #[cfg(feature = "native")]
 pub mod camera {
     use std::sync::{
-        Arc,
-        Mutex,
-        mpsc::{
-            self,
-            Sender,
-            SyncSender,
-            Receiver,
-            TryRecvError,
-        },
+        mpsc::{self, Receiver, Sender, SyncSender, TryRecvError},
+        Arc, Mutex,
     };
 
     use image::RgbImage;
     use nokhwa::{
         nokhwa_initialize,
-        query,
-        CallbackCamera,
         pixel_format::RgbFormat,
-        utils::{
-            ApiBackend,
-            RequestedFormat,
-            RequestedFormatType,
-        },
+        query,
+        utils::{ApiBackend, RequestedFormat, RequestedFormatType},
+        CallbackCamera,
     };
     use once_cell::sync::OnceCell;
 
@@ -34,18 +22,16 @@ pub mod camera {
     pub static APP_RUN_SENDER: OnceCell<Sender<()>> = OnceCell::new();
 
     pub fn native_camera_thread() {
-        let (
-            sample_sender,
-            sample_receiver,
-        ) = mpsc::sync_channel(1);
-        SAMPLE_RECEIVER.set(Arc::new(Mutex::new(sample_receiver))).unwrap();
+        let (sample_sender, sample_receiver) = mpsc::sync_channel(1);
+        SAMPLE_RECEIVER
+            .set(Arc::new(Mutex::new(sample_receiver)))
+            .unwrap();
         SAMPLE_SENDER.set(sample_sender).unwrap();
 
-        let (
-            app_run_sender,
-            app_run_receiver,
-        ) = mpsc::channel();
-        APP_RUN_RECEIVER.set(Arc::new(Mutex::new(app_run_receiver))).unwrap();
+        let (app_run_sender, app_run_receiver) = mpsc::channel();
+        APP_RUN_RECEIVER
+            .set(Arc::new(Mutex::new(app_run_receiver)))
+            .unwrap();
         APP_RUN_SENDER.set(app_run_sender).unwrap();
 
         nokhwa_initialize(|granted| {
@@ -62,7 +48,8 @@ pub mod camera {
             let image = buffer.decode_image::<RgbFormat>().unwrap();
             let sender = SAMPLE_SENDER.get().unwrap();
             sender.send(image).unwrap();
-        }).unwrap();
+        })
+        .unwrap();
 
         camera.open_stream().unwrap();
 
@@ -99,11 +86,7 @@ pub mod camera {
 pub mod camera {
     use std::cell::RefCell;
 
-    use image::{
-        DynamicImage,
-        RgbImage,
-        RgbaImage,
-    };
+    use image::{DynamicImage, RgbImage, RgbaImage};
     use wasm_bindgen::prelude::*;
 
     thread_local! {
@@ -125,9 +108,6 @@ pub mod camera {
     }
 
     pub fn receive_image() -> Option<RgbImage> {
-        SAMPLE_RECEIVER.with(|receiver| {
-            receiver.borrow_mut().take()
-        })
+        SAMPLE_RECEIVER.with(|receiver| receiver.borrow_mut().take())
     }
 }
-

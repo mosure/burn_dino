@@ -1,7 +1,6 @@
 use burn::prelude::*;
 
-
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct MlpConfig {
     pub in_features: usize,
     pub hidden_features: Option<usize>,
@@ -16,7 +15,6 @@ impl MlpConfig {
     }
 }
 
-
 #[derive(Module, Debug)]
 pub struct Mlp<B: Backend, const D: usize> {
     pub act: nn::Gelu,
@@ -26,10 +24,7 @@ pub struct Mlp<B: Backend, const D: usize> {
 }
 
 impl<B: Backend, const D: usize> Mlp<B, D> {
-    fn new(
-        device: &B::Device,
-        config: MlpConfig,
-    ) -> Self {
+    fn new(device: &B::Device, config: MlpConfig) -> Self {
         let hidden_features = config.hidden_features.unwrap_or(config.in_features);
         let fc1 = nn::LinearConfig::new(config.in_features, hidden_features)
             .with_bias(config.bias.unwrap_or(false))

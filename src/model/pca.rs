@@ -1,11 +1,6 @@
-use burn::{
-    prelude::*,
-    module::Param,
-    nn::Initializer,
-};
+use burn::{module::Param, nn::Initializer, prelude::*};
 
-
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct PcaTransformConfig {
     pub input_dim: usize,
     pub output_dim: usize,
@@ -22,8 +17,6 @@ impl PcaTransformConfig {
         PcaTransform::new(device, self)
     }
 }
-
-
 
 // mod linalg {
 //     use burn::{
@@ -58,7 +51,6 @@ impl PcaTransformConfig {
 //     }
 // }
 
-
 #[derive(Module, Debug)]
 pub struct PcaTransform<B: Backend> {
     pub components: Param<Tensor<B, 2>>,
@@ -66,23 +58,14 @@ pub struct PcaTransform<B: Backend> {
 }
 
 impl<B: Backend> PcaTransform<B> {
-    pub fn new(
-        device: &B::Device,
-        config: &PcaTransformConfig,
-    ) -> Self {
+    pub fn new(device: &B::Device, config: &PcaTransformConfig) -> Self {
         let components = Initializer::Ones.init([config.output_dim, config.input_dim], device);
         let mean = Initializer::Zeros.init([1, config.input_dim], device);
 
-        Self {
-            components,
-            mean,
-        }
+        Self { components, mean }
     }
 
-    pub fn forward(
-        &self,
-        x: Tensor<B, 2>,
-    ) -> Tensor<B, 2> {
+    pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
         let transformed = x.matmul(self.components.val().transpose());
         transformed - self.mean.val().matmul(self.components.val().transpose())
     }

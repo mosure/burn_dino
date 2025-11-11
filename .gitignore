@@ -2,7 +2,6 @@ debug/
 target/
 vendor/
 out/
-Cargo.lock
 **/*.rs.bk
 *.pdb
 
@@ -10,6 +9,8 @@ Cargo.lock
 
 *.ply
 *.gcloud
+*.safetensors
+*.mpk
 
 .DS_Store
 
