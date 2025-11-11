@@ -5,7 +5,7 @@ use burn::{
     prelude::*,
     record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
 };
-use image::{load_from_memory_with_format, DynamicImage, ImageFormat, RgbImage};
+use image::{DynamicImage, ImageFormat, RgbImage, load_from_memory_with_format};
 
 use burn_dino::model::{
     dino::{DinoVisionTransformer, DinoVisionTransformerConfig},

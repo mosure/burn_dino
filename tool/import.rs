@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bevy_args::{parse_args, Deserialize, Parser, Serialize, ValueEnum};
+use bevy_args::{Deserialize, Parser, Serialize, ValueEnum, parse_args};
 use burn::{
     module::Module,
     record::{FullPrecisionSettings, NamedMpkFileRecorder},

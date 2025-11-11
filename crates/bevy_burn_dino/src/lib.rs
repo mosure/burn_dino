@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 
+use burn::nn::interpolate::{Interpolate2d, Interpolate2dConfig, InterpolateMode};
 use burn::prelude::*;
-use image::{DynamicImage, ImageBuffer, Rgb, RgbImage, RgbaImage};
+use image::{DynamicImage, RgbImage};
 
 use burn_dino::model::{
     dino::{DinoVisionTransformer, DinoVisionTransformerConfig},
@@ -51,27 +52,6 @@ fn preprocess_image<B: Backend>(
     normalize(input, device)
 }
 
-async fn to_image<B: Backend>(
-    image: Tensor<B, 4>,
-    upsample_height: u32,
-    upsample_width: u32,
-) -> RgbaImage {
-    let height = image.shape().dims[1];
-    let width = image.shape().dims[2];
-
-    let image = image.to_data_async().await.to_vec::<f32>().unwrap();
-    let image =
-        ImageBuffer::<Rgb<f32>, Vec<f32>>::from_raw(width as u32, height as u32, image).unwrap();
-
-    DynamicImage::ImageRgb32F(image)
-        .resize_exact(
-            upsample_width,
-            upsample_height,
-            image::imageops::FilterType::Triangle,
-        )
-        .to_rgba8()
-}
-
 // TODO: benchmark process_frame
 pub async fn process_frame<B: Backend>(
     input: RgbImage,
@@ -79,7 +59,7 @@ pub async fn process_frame<B: Backend>(
     dino_model: Arc<Mutex<DinoVisionTransformer<B>>>,
     pca_model: Arc<Mutex<PcaTransform<B>>>,
     device: B::Device,
-) -> Vec<u8> {
+) -> Tensor<B, 3> {
     let input_tensor: Tensor<B, 4> = preprocess_image(input, &dino_config, &device);
 
     let dino_features = {
@@ -112,14 +92,19 @@ pub async fn process_frame<B: Backend>(
         pca_features = pca_features.slice_assign([0..n_samples, i..i + 1], scaled);
     }
 
-    let pca_features = pca_features.reshape([batch, spatial_size, spatial_size, 3]);
+    let mut pca_features = pca_features.reshape([batch, spatial_size, spatial_size, 3]);
+    pca_features = pca_features.permute([0, 3, 1, 2]);
 
-    let pca_features = to_image(
-        pca_features,
-        dino_config.image_size as u32,
-        dino_config.image_size as u32,
-    )
-    .await;
+    let upsample: Interpolate2d = Interpolate2dConfig {
+        output_size: Some([dino_config.image_size, dino_config.image_size]),
+        scale_factor: None,
+        mode: InterpolateMode::Cubic,
+    }
+    .init();
+    let pca_features = upsample.forward(pca_features).permute([0, 2, 3, 1]);
 
-    pca_features.into_raw()
+    let rgb = pca_features.squeeze_dim(0);
+    let alpha = Tensor::ones([dino_config.image_size, dino_config.image_size, 1], &device);
+
+    Tensor::cat(vec![rgb, alpha], 2)
 }

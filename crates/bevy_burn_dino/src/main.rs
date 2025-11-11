@@ -1,15 +1,18 @@
+#![recursion_limit = "256"]
+
 use std::sync::{Arc, Mutex};
 
+use bevy::asset::RenderAssetUsages;
 use bevy::{
     color::palettes::css::GOLD,
     diagnostic::{
         Diagnostic, DiagnosticPath, Diagnostics, DiagnosticsStore, FrameTimeDiagnosticsPlugin,
         RegisterDiagnostic,
     },
-    ecs::{system::SystemState, world::CommandQueue},
+    ecs::world::CommandQueue,
     prelude::*,
     render::{
-        render_resource::{Extent3d, TextureDimension, TextureFormat},
+        render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
         settings::{RenderCreation, WgpuFeatures, WgpuSettings},
         RenderPlugin,
     },
@@ -17,11 +20,11 @@ use bevy::{
     ui::widget::ImageNode,
     window::WindowResolution,
 };
-use bevy::asset::RenderAssetUsages;
 use bevy_args::{parse_args, Deserialize, Parser, Serialize, ValueEnum};
+use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, TransferKind};
 use burn::{
-    backend::wgpu::{init_setup_async, Wgpu},
     backend::wgpu::graphics::AutoGraphicsApi,
+    backend::wgpu::{init_setup_async, Wgpu},
     prelude::*,
 };
 
@@ -232,6 +235,7 @@ struct PcaTransformModel<B: Backend> {
 #[derive(Resource, Default)]
 struct PcaFeatures {
     image: Handle<Image>,
+    entity: Option<Entity>,
 }
 
 #[derive(Component)]
@@ -244,6 +248,10 @@ fn process_frames(
     pca_features_handle: Res<PcaFeatures>,
     active_tasks: Query<&ProcessImage>,
 ) {
+    let Some(image_entity) = pca_features_handle.entity else {
+        return;
+    };
+
     // TODO: move to config
     // TODO: fix multiple in flight deadlock
     let inference_max_in_flight = 1;
@@ -253,33 +261,36 @@ fn process_frames(
 
     if let Some(image) = receive_image() {
         let thread_pool = AsyncComputeTaskPool::get();
-        let entity = commands.spawn_empty().id();
+        let task_entity = commands.spawn_empty().id();
 
         let device = dino_model.device.clone();
         let dino_config = dino_model.config.clone();
         let dino_model = dino_model.model.clone();
-        let image_handle = pca_features_handle.image.clone();
         let pca_model = pca_transform.model.clone();
+        let target_entity = image_entity;
 
         let task = thread_pool.spawn(async move {
-            let img_data = process_frame(image, dino_config, dino_model, pca_model, device).await;
+            let tensor = process_frame(image, dino_config, dino_model, pca_model, device).await;
 
             let mut command_queue = CommandQueue::default();
             command_queue.push(move |world: &mut World| {
-                let mut system_state = SystemState::<ResMut<Assets<Image>>>::new(world);
-                let mut images = system_state.get_mut(world);
+                if let Ok(mut image_entity_mut) = world.get_entity_mut(target_entity) {
+                    if let Some(mut handle) = image_entity_mut.get_mut::<BevyBurnHandle<Wgpu>>() {
+                        handle.tensor = tensor.clone();
+                        handle.upload = true;
+                    }
+                }
 
-                // TODO: share wgpu io between bevy/burn
-                let existing_image = images.get_mut(&image_handle).unwrap();
-                existing_image.data = Some(img_data);
-
-                world.entity_mut(entity).remove::<ProcessImage>();
+                if let Ok(mut tracker) = world.get_entity_mut(task_entity) {
+                    tracker.remove::<ProcessImage>();
+                    tracker.despawn();
+                }
             });
 
             command_queue
         });
 
-        commands.entity(entity).insert(ProcessImage(task));
+        commands.entity(task_entity).insert(ProcessImage(task));
     }
 }
 
@@ -310,18 +321,25 @@ fn setup_ui(
     mut pca_image: ResMut<PcaFeatures>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    pca_image.image = images.add(Image::new_fill(
-        Extent3d {
-            width: dino.config.image_size as u32,
-            height: dino.config.image_size as u32,
-            depth_or_array_layers: 1,
-        },
+    let size = Extent3d {
+        width: dino.config.image_size as u32,
+        height: dino.config.image_size as u32,
+        depth_or_array_layers: 1,
+    };
+    let mut image = Image::new_fill(
+        size,
         TextureDimension::D2,
-        &[0, 0, 0, 0],
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::all(),
-    ));
+        &[0; 16],
+        TextureFormat::Rgba32Float,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.usage |= TextureUsages::COPY_SRC
+        | TextureUsages::COPY_DST
+        | TextureUsages::TEXTURE_BINDING
+        | TextureUsages::STORAGE_BINDING;
+    pca_image.image = images.add(image);
 
+    let mut image_entity = None;
     commands
         .spawn(Node {
             display: Display::Grid,
@@ -332,8 +350,24 @@ fn setup_ui(
             ..default()
         })
         .with_children(|builder| {
-            builder.spawn(ImageNode::new(pca_image.image.clone()).with_mode(NodeImageMode::Stretch));
+            let entity = builder
+                .spawn((
+                    ImageNode::new(pca_image.image.clone()).with_mode(NodeImageMode::Stretch),
+                    BevyBurnHandle::<Wgpu> {
+                        bevy_image: pca_image.image.clone(),
+                        tensor: Tensor::<Wgpu, 3>::zeros(
+                            [dino.config.image_size, dino.config.image_size, 4],
+                            &dino.device,
+                        ),
+                        upload: true,
+                        direction: BindingDirection::BurnToBevy,
+                        xfer: TransferKind::Gpu,
+                    },
+                ))
+                .id();
+            image_entity = Some(entity);
         });
+    pca_image.entity = image_entity;
 
     commands.spawn(Camera2d);
 }
@@ -393,6 +427,7 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
         });
 
     app.add_plugins(default_plugins);
+    app.add_plugins(BevyBurnBridgePlugin::<Wgpu>::default());
 
     #[cfg(feature = "editor")]
     if args.editor {

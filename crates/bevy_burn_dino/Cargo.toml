@@ -18,7 +18,9 @@ categories = [
 [features]
 default = ["native"]
 
-native = ["burn/autotune", "futures", "nokhwa"]
+fusion_backend = ["burn/fusion"]
+
+native = ["burn/autotune", "futures", "nokhwa", "fusion_backend"]
 web = []
 
 editor = []
@@ -29,6 +31,7 @@ perftest = []
 [dependencies]
 # bevy_args = "1.6"
 bevy_args = "2.0"
+bevy_burn = { path = "../../sandbox/bevy_burn" }
 burn_dino = { path = "../../", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 futures = { version = "0.3", optional = true }
