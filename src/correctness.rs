@@ -10,6 +10,11 @@ use safetensors::tensor::{SafeTensors, TensorView};
 
 use crate::model::dino::{DinoVisionTransformer, DinoVisionTransformerConfig};
 
+type TensorPayload<const D: usize> = (Vec<f32>, [usize; D]);
+type TensorPayloadResult<const D: usize> = Result<TensorPayload<D>, CorrectnessError>;
+type OptionalTensorPayloadResult<const D: usize> =
+    Result<Option<TensorPayload<D>>, CorrectnessError>;
+
 #[derive(Debug)]
 pub struct CorrectnessReference {
     pub network_input: Vec<f32>,
@@ -231,7 +236,7 @@ fn compute_stats(burn: &[f32], torch: &[f32]) -> MetricStats {
 fn read_tensor<const D: usize>(
     tensors: &SafeTensors<'_>,
     name: &'static str,
-) -> Result<(Vec<f32>, [usize; D]), CorrectnessError> {
+) -> TensorPayloadResult<D> {
     let view = tensors
         .tensor(name)
         .map_err(|_| CorrectnessError::MissingTensor(name))?;
@@ -250,7 +255,7 @@ fn read_tensor<const D: usize>(
 fn read_tensor_optional<const D: usize>(
     tensors: &SafeTensors<'_>,
     name: &'static str,
-) -> Result<Option<(Vec<f32>, [usize; D])>, CorrectnessError> {
+) -> OptionalTensorPayloadResult<D> {
     match tensors.tensor(name) {
         Ok(view) => {
             let shape: [usize; D] =

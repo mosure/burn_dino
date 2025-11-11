@@ -1,17 +1,24 @@
-use burn::{backend::Wgpu, prelude::*};
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+#![cfg_attr(not(feature = "backend_wgpu"), allow(dead_code))]
 
+#[cfg(feature = "backend_wgpu")]
+use burn::{backend::wgpu::Wgpu, prelude::*};
+#[cfg(feature = "backend_wgpu")]
 use burn_dino::model::dino::DinoVisionTransformerConfig;
+#[cfg(feature = "backend_wgpu")]
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
+#[cfg(feature = "backend_wgpu")]
 criterion_group! {
     name = ladon_burn_benchmarks;
     config = Criterion::default().sample_size(500);
     targets = inference_benchmark,
 }
+#[cfg(feature = "backend_wgpu")]
 criterion_main!(ladon_burn_benchmarks);
 
+#[cfg(feature = "backend_wgpu")]
 fn inference_benchmark(c: &mut Criterion) {
-    let configs = vec![
+    let configs = [
         (DinoVisionTransformerConfig::vits(None, None), "vits"),
         (DinoVisionTransformerConfig::vitb(None, None), "vitb"),
         (DinoVisionTransformerConfig::vitl(None, None), "vitl"),
@@ -42,4 +49,12 @@ fn inference_benchmark(c: &mut Criterion) {
             });
         });
     }
+}
+
+#[cfg(not(feature = "backend_wgpu"))]
+fn main() {
+    eprintln!(
+        "dinov2 benchmark requires `--features backend_wgpu` (fusion path). \
+         Re-run with `cargo bench --features backend_wgpu`."
+    );
 }
