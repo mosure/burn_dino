@@ -332,45 +332,60 @@ impl<B: Backend> DinoVisionTransformer<B> {
     }
 
     #[allow(non_snake_case)]
-    pub fn intermediate_layers(
+    pub fn forward_with_intermediate_tokens(
         &self,
         x: Tensor<B, 4>,
         layers: &[usize],
     ) -> (Vec<Tensor<B, 2>>, Vec<Tensor<B, 4>>) {
-        let mut x = self.prepare_tokens_with_masks(x, None);
+        let mut tokens = self.prepare_tokens_with_masks(x, None);
 
         let mut class_tokens = Vec::with_capacity(layers.len());
-        let mut output = Vec::with_capacity(layers.len());
+        let mut outputs = Vec::with_capacity(layers.len());
 
-        for (i, block) in self.blocks.iter().enumerate() {
-            x = block.forward(x);
+        for (index, block) in self.blocks.iter().enumerate() {
+            tokens = block.forward(tokens);
 
-            if layers.contains(&i) {
-                let x = self.norm.forward(x.clone());
-
-                let class_token: Tensor<B, 2> =
-                    x.clone().slice([0..x.shape().dims[0], 0..1]).squeeze_dim(1);
-                let patch_start = 1 + self.register_token_count;
-                let out = x
-                    .clone()
-                    .slice([0..x.shape().dims[0], patch_start..x.shape().dims[1]]);
-
-                let [B, _, W, H] = x.shape().dims();
-                let reshaped = out
-                    .reshape([
-                        B as i32,
-                        (W / self.patch_size) as i32,
-                        (H / self.patch_size) as i32,
-                        -1,
-                    ])
-                    .permute([0, 3, 1, 2]);
-
-                class_tokens.push(class_token);
-                output.push(reshaped);
+            if layers.contains(&index) {
+                let (cls, patches) = self.extract_intermediate_features(tokens.clone());
+                class_tokens.push(cls);
+                outputs.push(patches);
             }
         }
 
-        (class_tokens, output)
+        (class_tokens, outputs)
+    }
+
+    fn extract_intermediate_features(&self, tokens: Tensor<B, 3>) -> (Tensor<B, 2>, Tensor<B, 4>) {
+        let normalized = self.norm.forward(tokens);
+
+        let batch = normalized.shape().dims[0];
+        let seq_len = normalized.shape().dims[1];
+        let reg_count = self.register_token_count;
+
+        let class_token = normalized.clone().slice([0..batch, 0..1]).squeeze_dim(1);
+
+        let patch_start = 1 + reg_count;
+        let patch_tokens = normalized.clone().slice([0..batch, patch_start..seq_len]);
+        let patch_dims = patch_tokens.shape().dims;
+        let patch_count = patch_dims[1];
+        let embed_dim = patch_dims[2];
+
+        let spatial = patch_count.isqrt();
+        assert!(
+            spatial * spatial == patch_count,
+            "patch tokens do not form a square grid (got {patch_count})"
+        );
+
+        let reshaped = patch_tokens
+            .reshape([
+                batch as i32,
+                spatial as i32,
+                spatial as i32,
+                embed_dim as i32,
+            ])
+            .permute([0, 3, 1, 2]);
+
+        (class_token, reshaped)
     }
 
     pub fn forward(&self, x: Tensor<B, 4>, masks: Option<Tensor<B, 3, Bool>>) -> DinoOutput<B> {

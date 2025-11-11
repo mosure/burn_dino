@@ -5,7 +5,7 @@ use burn::{backend::wgpu::Wgpu, prelude::*};
 #[cfg(feature = "backend_wgpu")]
 use burn_dino::model::dino::DinoVisionTransformerConfig;
 #[cfg(feature = "backend_wgpu")]
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 #[cfg(feature = "backend_wgpu")]
 criterion_group! {
