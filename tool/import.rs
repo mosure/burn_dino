@@ -76,8 +76,8 @@ pub struct DinoImportConfig {
     #[arg(long)]
     pub validate: bool,
 
-    #[arg(long, default_value_t = 0)]
-    pub register_tokens: usize,
+    #[arg(long)]
+    pub register_tokens: Option<usize>,
 
     #[arg(long, default_value = "assets/models/face_pca.safetensors")]
     pub pca_weights: PathBuf,
@@ -94,10 +94,10 @@ type Backend = burn::backend::NdArray<f32>;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args::<DinoImportConfig>();
     let device = <Backend as burn::tensor::backend::Backend>::Device::default();
-    let config = args
-        .vit_type
-        .config()
-        .with_register_tokens(args.register_tokens);
+    let mut config = args.vit_type.config();
+    if let Some(register_tokens) = args.register_tokens {
+        config = config.with_register_tokens(register_tokens);
+    }
 
     let checkpoint_path = import_dino_weights(&device, &args, &config)?;
 
