@@ -79,10 +79,20 @@ impl Default for BevyBurnDinoConfig {
         Self {
             press_esc_to_close: true,
             show_fps: true, // TODO: display inference fps (UI fps is decoupled via async compute pool)
-            inference_height: 518,
-            inference_width: 518,
+            inference_height: 512,
+            inference_width: 512,
             pca_type: PcaType::default(),
         }
+    }
+}
+
+fn sanitize_inference_dim(value: usize) -> usize {
+    let clamped = value.clamp(64, 2048);
+    let remainder = clamped % 32;
+    if remainder == 0 {
+        clamped
+    } else {
+        clamped + (32 - remainder)
     }
 }
 
@@ -269,25 +279,30 @@ fn process_frames(
         let pca_model = pca_transform.model.clone();
         let target_entity = image_entity;
 
-        let task = thread_pool.spawn(async move {
-            let tensor = process_frame(image, dino_config, dino_model, pca_model, device).await;
+        let task = thread_pool.spawn({
+            let device_clone = device.clone();
+            async move {
+                let tensor =
+                    process_frame(image, dino_config, dino_model, pca_model, device_clone).await;
 
-            let mut command_queue = CommandQueue::default();
-            command_queue.push(move |world: &mut World| {
-                if let Ok(mut image_entity_mut) = world.get_entity_mut(target_entity) {
-                    if let Some(mut handle) = image_entity_mut.get_mut::<BevyBurnHandle<Wgpu>>() {
-                        handle.tensor = tensor.clone();
-                        handle.upload = true;
+                let mut command_queue = CommandQueue::default();
+                command_queue.push(move |world: &mut World| {
+                    if let Ok(mut image_entity_mut) = world.get_entity_mut(target_entity) {
+                        if let Some(mut handle) = image_entity_mut.get_mut::<BevyBurnHandle<Wgpu>>()
+                        {
+                            handle.tensor = tensor.clone();
+                            handle.upload = true;
+                        }
                     }
-                }
 
-                if let Ok(mut tracker) = world.get_entity_mut(task_entity) {
-                    tracker.remove::<ProcessImage>();
-                    tracker.despawn();
-                }
-            });
+                    if let Ok(mut tracker) = world.get_entity_mut(task_entity) {
+                        tracker.remove::<ProcessImage>();
+                        tracker.despawn();
+                    }
+                });
 
-            command_queue
+                command_queue
+            }
         });
 
         commands.entity(task_entity).insert(ProcessImage(task));
@@ -315,6 +330,29 @@ fn handle_tasks(
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn pca_image_setup() -> (&'static [u8], TextureFormat, TransferKind, TextureUsages) {
+    (
+        &[0u8; 4],
+        TextureFormat::Rgba8UnormSrgb,
+        TransferKind::Cpu,
+        TextureUsages::COPY_SRC | TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING,
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn pca_image_setup() -> (&'static [u8], TextureFormat, TransferKind, TextureUsages) {
+    (
+        &[0u8; 16],
+        TextureFormat::Rgba32Float,
+        TransferKind::Gpu,
+        TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::STORAGE_BINDING,
+    )
+}
+
 fn setup_ui(
     mut commands: Commands,
     dino: Res<DinoModel<Wgpu>>,
@@ -326,17 +364,15 @@ fn setup_ui(
         height: dino.config.image_size as u32,
         depth_or_array_layers: 1,
     };
+    let (fill_bytes, texture_format, transfer_kind, texture_usage) = pca_image_setup();
     let mut image = Image::new_fill(
         size,
         TextureDimension::D2,
-        &[0; 16],
-        TextureFormat::Rgba32Float,
+        fill_bytes,
+        texture_format,
         RenderAssetUsages::RENDER_WORLD,
     );
-    image.texture_descriptor.usage |= TextureUsages::COPY_SRC
-        | TextureUsages::COPY_DST
-        | TextureUsages::TEXTURE_BINDING
-        | TextureUsages::STORAGE_BINDING;
+    image.texture_descriptor.usage |= texture_usage;
     pca_image.image = images.add(image);
 
     let mut image_entity = None;
@@ -361,7 +397,7 @@ fn setup_ui(
                         ),
                         upload: true,
                         direction: BindingDirection::BurnToBevy,
-                        xfer: TransferKind::Gpu,
+                        xfer: transfer_kind,
                     },
                 ))
                 .id();
@@ -507,7 +543,12 @@ fn fps_update_system(
 async fn run_app() {
     log("running app...");
 
-    let args = parse_args::<BevyBurnDinoConfig>();
+    let mut args = parse_args::<BevyBurnDinoConfig>();
+    let sanitized_height = sanitize_inference_dim(args.inference_height);
+    let sanitized_width = sanitize_inference_dim(args.inference_width);
+    let image_size = sanitized_height.min(sanitized_width);
+    args.inference_height = image_size;
+    args.inference_width = image_size;
     log(&format!("{:?}", args));
 
     let device = Default::default();
@@ -516,7 +557,7 @@ async fn run_app() {
     log("device created");
 
     let config = DinoVisionTransformerConfig {
-        ..DinoVisionTransformerConfig::vits(None, None) // TODO: supply image size fron config
+        ..DinoVisionTransformerConfig::vits(Some(image_size), None)
     };
     let dino = io::load_model::<Wgpu>(&config, &device).await;
 
@@ -534,7 +575,7 @@ async fn run_app() {
     app.init_resource::<PcaFeatures>();
     app.insert_resource(DinoModel {
         config,
-        device,
+        device: device.clone(),
         model: Arc::new(Mutex::new(dino)),
     });
     app.insert_resource(PcaTransformModel {

@@ -618,9 +618,9 @@ dependencies = [
 
 [[package]]
 name = "bevy_burn"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bf3a8360bf7e6223d4e98e1a0acae803f79014d1857404171e480061d23293f"
+checksum = "1ff62e1c3105d1ce251eca77f6db3e4d9718f174444507e6205c9bd5fbd95363"
 dependencies = [
  "bevy",
  "burn",
@@ -2216,7 +2216,7 @@ dependencies = [
 
 [[package]]
 name = "burn_dino"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bevy_args",
  "bhtsne",

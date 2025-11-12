@@ -60,7 +60,7 @@ impl DinoVisionTransformerConfig {
             BlockConfig {
                 attn: AttentionConfig {
                     dim,
-                    quiet_softmax: true,
+                    quiet_softmax: false,
                     ..Default::default()
                 },
                 layer_scale: LayerScaleConfig { dim }.into(),
