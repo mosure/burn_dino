@@ -25,6 +25,9 @@ pub struct DinoVisionTransformerConfig {
     #[config(default = "0")]
     pub register_token_count: usize,
 
+    #[config(default = "true")]
+    pub use_register_tokens: bool,
+
     #[config(default = "Initializer::Normal{mean:0.02, std:1.0}")]
     pub initializer: Initializer,
 }
@@ -143,6 +146,13 @@ impl DinoVisionTransformerConfig {
 
     pub fn with_register_tokens(mut self, count: usize) -> Self {
         self.register_token_count = count;
+        self.use_register_tokens = count > 0;
+        self
+    }
+
+    pub fn without_register_tokens(mut self) -> Self {
+        self.register_token_count = 0;
+        self.use_register_tokens = false;
         self
     }
 }
@@ -188,7 +198,11 @@ impl<B: Backend> DinoVisionTransformer<B> {
             .initializer
             .init([1, 1, config.embedding_dimension], device);
 
-        let num_tokens = 1;
+        let num_tokens = 1 + if config.use_register_tokens {
+            config.register_token_count
+        } else {
+            0
+        };
         let pos_embed = config.initializer.init(
             [
                 1,
@@ -202,7 +216,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             .initializer
             .init([1, config.embedding_dimension], device);
 
-        let register_tokens = if config.register_token_count > 0 {
+        let register_tokens = if config.use_register_tokens && config.register_token_count > 0 {
             Some(
                 Initializer::Normal {
                     mean: 0.0,
@@ -235,6 +249,12 @@ impl<B: Backend> DinoVisionTransformer<B> {
             blocks.push(block);
         }
 
+        let register_token_count = if config.use_register_tokens {
+            config.register_token_count
+        } else {
+            0
+        };
+
         Self {
             activation: Gelu::new(),
             cls_token,
@@ -246,14 +266,16 @@ impl<B: Backend> DinoVisionTransformer<B> {
             norm,
             blocks,
             patch_size: config.patch_size,
-            register_token_count: config.register_token_count,
+            register_token_count,
         }
     }
 
     #[allow(non_snake_case)]
     pub fn interpolate_pos_encoding(&self, x: Tensor<B, 3>, W: usize, H: usize) -> Tensor<B, 3> {
         let npatch = x.shape().dims[1] - 1;
-        let N = self.pos_embed.shape().dims[1] - 1;
+        let register_offset = self.register_token_count;
+        let tokens_start = 1 + register_offset;
+        let N = self.pos_embed.shape().dims[1] - tokens_start;
 
         if npatch == N && W == H {
             return self.pos_embed.val().clone();
@@ -269,7 +291,11 @@ impl<B: Backend> DinoVisionTransformer<B> {
             .clone()
             .slice([0..b_dim, 0..1])
             .squeeze_dim(1);
-        let patch_pos_embed = self.pos_embed.val().clone().slice([0..b_dim, 1..n_dim]);
+        let patch_pos_embed = self
+            .pos_embed
+            .val()
+            .clone()
+            .slice([0..b_dim, tokens_start..n_dim]);
         let dim = x.shape().dims[2];
         let M = N.isqrt();
 
@@ -336,7 +362,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
         &self,
         x: Tensor<B, 4>,
         layers: &[usize],
-    ) -> (Vec<Tensor<B, 2>>, Vec<Tensor<B, 4>>) {
+    ) -> (Vec<Tensor<B, 2>>, Vec<Tensor<B, 3>>) {
         let mut tokens = self.prepare_tokens_with_masks(x, None);
 
         let mut class_tokens = Vec::with_capacity(layers.len());
@@ -346,46 +372,17 @@ impl<B: Backend> DinoVisionTransformer<B> {
             tokens = block.forward(tokens);
 
             if layers.contains(&index) {
-                let (cls, patches) = self.extract_intermediate_features(tokens.clone());
+                let normalized = self.norm.forward(tokens.clone());
+                let cls = normalized
+                    .clone()
+                    .slice([0..normalized.shape().dims[0], 0..1])
+                    .squeeze_dim(1);
                 class_tokens.push(cls);
-                outputs.push(patches);
+                outputs.push(normalized);
             }
         }
 
         (class_tokens, outputs)
-    }
-
-    fn extract_intermediate_features(&self, tokens: Tensor<B, 3>) -> (Tensor<B, 2>, Tensor<B, 4>) {
-        let normalized = self.norm.forward(tokens);
-
-        let batch = normalized.shape().dims[0];
-        let seq_len = normalized.shape().dims[1];
-        let reg_count = self.register_token_count;
-
-        let class_token = normalized.clone().slice([0..batch, 0..1]).squeeze_dim(1);
-
-        let patch_start = 1 + reg_count;
-        let patch_tokens = normalized.clone().slice([0..batch, patch_start..seq_len]);
-        let patch_dims = patch_tokens.shape().dims;
-        let patch_count = patch_dims[1];
-        let embed_dim = patch_dims[2];
-
-        let spatial = patch_count.isqrt();
-        assert!(
-            spatial * spatial == patch_count,
-            "patch tokens do not form a square grid (got {patch_count})"
-        );
-
-        let reshaped = patch_tokens
-            .reshape([
-                batch as i32,
-                spatial as i32,
-                spatial as i32,
-                embed_dim as i32,
-            ])
-            .permute([0, 3, 1, 2]);
-
-        (class_token, reshaped)
     }
 
     pub fn forward(&self, x: Tensor<B, 4>, masks: Option<Tensor<B, 3, Bool>>) -> DinoOutput<B> {

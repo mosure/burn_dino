@@ -2032,7 +2032,7 @@ dependencies = [
  "libm",
  "macerator",
  "matrixmultiply",
- "ndarray 0.16.1",
+ "ndarray",
  "num-traits",
  "paste",
  "portable-atomic-util",
@@ -2216,7 +2216,7 @@ dependencies = [
 
 [[package]]
 name = "burn_dino"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "bevy_args",
  "bhtsne",
@@ -2227,7 +2227,6 @@ dependencies = [
  "criterion",
  "futures-intrusive",
  "image",
- "ndarray 0.17.1",
  "pollster",
  "safetensors 0.6.2",
  "serde",
@@ -5857,21 +5856,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ndarray"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c7c9125e8f6f10c9da3aad044cc918cf8784fa34de857b1aa68038eb05a50a9"
-dependencies = [
- "matrixmultiply",
- "num-complex",
- "num-integer",
- "num-traits",
- "portable-atomic",
- "portable-atomic-util",
- "rawpointer",
-]
-
-[[package]]
 name = "ndk"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8152,7 +8136,7 @@ dependencies = [
  "half",
  "lazy_static",
  "libc",
- "ndarray 0.16.1",
+ "ndarray",
  "rand 0.8.5",
  "safetensors 0.3.3",
  "thiserror 1.0.69",
