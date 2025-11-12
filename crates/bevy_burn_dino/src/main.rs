@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use bevy::asset::{AssetEvent, RenderAssetUsages};
+use bevy::asset::RenderAssetUsages;
 use bevy::{
     color::palettes::css::GOLD,
     diagnostic::{
@@ -22,20 +22,18 @@ use bevy::{
 };
 use bevy_args::{parse_args, Deserialize, Parser, Serialize, ValueEnum};
 use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, TransferKind};
-use bevy_webcam::{BevyWebcamPlugin, WebcamStream};
 use burn::{
     backend::wgpu::graphics::AutoGraphicsApi,
     backend::wgpu::{init_setup_async, Wgpu},
     prelude::*,
 };
-use image::RgbImage;
 
 use burn_dino::model::{
     dino::{DinoVisionTransformer, DinoVisionTransformerConfig},
     pca::{PcaTransform, PcaTransformConfig},
 };
 
-use bevy_burn_dino::process_frame;
+use bevy_burn_dino::{platform::camera::receive_image, process_frame};
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Reflect, ValueEnum)]
 pub enum PcaType {
@@ -259,31 +257,10 @@ fn process_frames(
     pca_transform: Res<PcaTransformModel<Wgpu>>,
     pca_features_handle: Res<PcaFeatures>,
     active_tasks: Query<&ProcessImage>,
-    stream: Res<WebcamStream>,
-    images: Res<Assets<Image>>,
-    mut webcam_events: MessageReader<AssetEvent<Image>>,
 ) {
     let Some(image_entity) = pca_features_handle.entity else {
         return;
     };
-
-    if stream.frame == Handle::default() {
-        return;
-    }
-
-    let frame_id = stream.frame.id();
-    let mut frame_changed = false;
-    for event in webcam_events.read() {
-        if event.is_added(frame_id) || event.is_modified(frame_id) {
-            frame_changed = true;
-        } else if event.is_removed(frame_id) {
-            warn!("webcam frame handle removed, waiting for it to be re-created");
-        }
-    }
-
-    if !frame_changed {
-        return;
-    }
 
     // TODO: move to config
     // TODO: fix multiple in flight deadlock
@@ -292,80 +269,44 @@ fn process_frames(
         return;
     }
 
-    let Some(rgb_image) = copy_webcam_frame(&stream.frame, &images) else {
-        return;
-    };
+    if let Some(image) = receive_image() {
+        let thread_pool = AsyncComputeTaskPool::get();
+        let task_entity = commands.spawn_empty().id();
 
-    let thread_pool = AsyncComputeTaskPool::get();
-    let task_entity = commands.spawn_empty().id();
+        let device = dino_model.device.clone();
+        let dino_config = dino_model.config.clone();
+        let dino_model = dino_model.model.clone();
+        let pca_model = pca_transform.model.clone();
+        let target_entity = image_entity;
 
-    let device = dino_model.device.clone();
-    let dino_config = dino_model.config.clone();
-    let dino_model = dino_model.model.clone();
-    let pca_model = pca_transform.model.clone();
-    let target_entity = image_entity;
+        let task = thread_pool.spawn({
+            let device_clone = device.clone();
+            async move {
+                let tensor =
+                    process_frame(image, dino_config, dino_model, pca_model, device_clone).await;
 
-    let task = thread_pool.spawn({
-        let device_clone = device.clone();
-        async move {
-            let tensor =
-                process_frame(rgb_image, dino_config, dino_model, pca_model, device_clone).await;
-
-            let mut command_queue = CommandQueue::default();
-            command_queue.push(move |world: &mut World| {
-                if let Ok(mut image_entity_mut) = world.get_entity_mut(target_entity) {
-                    if let Some(mut handle) = image_entity_mut.get_mut::<BevyBurnHandle<Wgpu>>() {
-                        handle.tensor = tensor.clone();
-                        handle.upload = true;
+                let mut command_queue = CommandQueue::default();
+                command_queue.push(move |world: &mut World| {
+                    if let Ok(mut image_entity_mut) = world.get_entity_mut(target_entity) {
+                        if let Some(mut handle) = image_entity_mut.get_mut::<BevyBurnHandle<Wgpu>>()
+                        {
+                            handle.tensor = tensor.clone();
+                            handle.upload = true;
+                        }
                     }
-                }
 
-                if let Ok(mut tracker) = world.get_entity_mut(task_entity) {
-                    tracker.remove::<ProcessImage>();
-                    tracker.despawn();
-                }
-            });
+                    if let Ok(mut tracker) = world.get_entity_mut(task_entity) {
+                        tracker.remove::<ProcessImage>();
+                        tracker.despawn();
+                    }
+                });
 
-            command_queue
-        }
-    });
+                command_queue
+            }
+        });
 
-    commands.entity(task_entity).insert(ProcessImage(task));
-}
-
-fn copy_webcam_frame(handle: &Handle<Image>, images: &Assets<Image>) -> Option<RgbImage> {
-    let Some(image) = images.get(handle) else {
-        warn!("webcam texture handle is missing from the asset storage");
-        return None;
-    };
-
-    let Some(pixels) = image.data.as_ref() else {
-        warn!("webcam frame texture is missing CPU-side pixel data");
-        return None;
-    };
-
-    if pixels.len() % 4 != 0 {
-        warn!("webcam frame buffer is not aligned to 4 bytes per pixel");
-        return None;
+        commands.entity(task_entity).insert(ProcessImage(task));
     }
-
-    let format = image.texture_descriptor.format;
-    if format != TextureFormat::Rgba8Unorm && format != TextureFormat::Rgba8UnormSrgb {
-        warn!(
-            "unsupported webcam texture format {:?}, expected RGBA8",
-            format
-        );
-        return None;
-    }
-
-    let width = image.texture_descriptor.size.width;
-    let height = image.texture_descriptor.size.height;
-    let mut rgb = Vec::with_capacity(width as usize * height as usize * 3);
-    for chunk in pixels.chunks_exact(4) {
-        rgb.extend_from_slice(&chunk[..3]);
-    }
-
-    RgbImage::from_vec(width, height, rgb)
 }
 
 fn handle_tasks(
@@ -522,7 +463,6 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
         });
 
     app.add_plugins(default_plugins);
-    app.add_plugins(BevyWebcamPlugin::default());
     app.add_plugins(BevyBurnBridgePlugin::<Wgpu>::default());
 
     #[cfg(feature = "editor")]
@@ -666,6 +606,7 @@ pub fn log(_msg: &str) {
 fn main() {
     #[cfg(feature = "native")]
     {
+        std::thread::spawn(bevy_burn_dino::platform::camera::native_camera_thread);
         futures::executor::block_on(run_app());
     }
 

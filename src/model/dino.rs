@@ -25,7 +25,7 @@ pub struct DinoVisionTransformerConfig {
     #[config(default = "0")]
     pub register_token_count: usize,
 
-    #[config(default = "false")]
+    #[config(default = "true")]
     pub use_register_tokens: bool,
 
     #[config(default = "true")]

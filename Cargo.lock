@@ -644,7 +644,6 @@ dependencies = [
  "bevy",
  "bevy_args",
  "bevy_burn",
- "bevy_webcam",
  "burn",
  "burn_dino",
  "clap",
@@ -653,6 +652,8 @@ dependencies = [
  "futures-intrusive",
  "image",
  "js-sys",
+ "nokhwa",
+ "once_cell",
  "serde",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1494,21 +1495,6 @@ dependencies = [
  "bevy_platform",
  "disqualified",
  "thread_local",
-]
-
-[[package]]
-name = "bevy_webcam"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b167891a82f09d3d4a49cd893dcbc025cab564c84a586106e92788b970b10d4f"
-dependencies = [
- "bevy",
- "console_error_panic_hook",
- "flume",
- "getrandom 0.3.4",
- "nokhwa",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -5935,6 +5921,7 @@ dependencies = [
  "nokhwa-bindings-macos",
  "nokhwa-bindings-windows",
  "nokhwa-core",
+ "parking_lot",
  "paste",
  "thiserror 2.0.17",
 ]

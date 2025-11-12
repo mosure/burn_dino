@@ -9,6 +9,8 @@ use burn_dino::model::{
     pca::PcaTransform,
 };
 
+pub mod platform;
+
 fn normalize<B: Backend>(input: Tensor<B, 4>, device: &B::Device) -> Tensor<B, 4> {
     let mean: Tensor<B, 1> = Tensor::from_floats([0.485, 0.456, 0.406], device);
     let std: Tensor<B, 1> = Tensor::from_floats([0.229, 0.224, 0.225], device);
