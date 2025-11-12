@@ -35,6 +35,8 @@ use burn_dino::model::{
 
 use bevy_burn_dino::{platform::camera::receive_image, process_frame};
 
+const MODEL_IMAGE_SIZE: usize = 518;
+
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Reflect, ValueEnum)]
 pub enum PcaType {
     Adaptive, // TODO: window adaptive pca
@@ -64,12 +66,6 @@ pub struct BevyBurnDinoConfig {
     #[arg(long, default_value = "true")]
     pub show_fps: bool,
 
-    #[arg(long, default_value = "518")]
-    pub inference_height: usize,
-
-    #[arg(long, default_value = "518")]
-    pub inference_width: usize,
-
     #[arg(long, value_enum, default_value_t = PcaType::Face)]
     pub pca_type: PcaType,
 }
@@ -79,20 +75,8 @@ impl Default for BevyBurnDinoConfig {
         Self {
             press_esc_to_close: true,
             show_fps: true, // TODO: display inference fps (UI fps is decoupled via async compute pool)
-            inference_height: 512,
-            inference_width: 512,
             pca_type: PcaType::default(),
         }
-    }
-}
-
-fn sanitize_inference_dim(value: usize) -> usize {
-    let clamped = value.clamp(64, 2048);
-    let remainder = clamped % 32;
-    if remainder == 0 {
-        clamped
-    } else {
-        clamped + (32 - remainder)
     }
 }
 
@@ -543,13 +527,11 @@ fn fps_update_system(
 async fn run_app() {
     log("running app...");
 
-    let mut args = parse_args::<BevyBurnDinoConfig>();
-    let sanitized_height = sanitize_inference_dim(args.inference_height);
-    let sanitized_width = sanitize_inference_dim(args.inference_width);
-    let image_size = sanitized_height.min(sanitized_width);
-    args.inference_height = image_size;
-    args.inference_width = image_size;
+    let args = parse_args::<BevyBurnDinoConfig>();
     log(&format!("{:?}", args));
+    log(&format!(
+        "using fixed inference resolution of {MODEL_IMAGE_SIZE}x{MODEL_IMAGE_SIZE}"
+    ));
 
     let device = Default::default();
     init_setup_async::<AutoGraphicsApi>(&device, Default::default()).await;
@@ -557,7 +539,10 @@ async fn run_app() {
     log("device created");
 
     let config = DinoVisionTransformerConfig {
-        ..DinoVisionTransformerConfig::vits(Some(image_size), None)
+        register_token_count: 0,
+        use_register_tokens: false,
+        normalize_intermediate_tokens: false,
+        ..DinoVisionTransformerConfig::vits(Some(MODEL_IMAGE_SIZE), None)
     };
     let dino = io::load_model::<Wgpu>(&config, &device).await;
 
