@@ -28,6 +28,9 @@ pub struct DinoVisionTransformerConfig {
     #[config(default = "false")]
     pub use_register_tokens: bool,
 
+    #[config(default = "true")]
+    pub normalize_intermediate_tokens: bool,
+
     #[config(default = "Initializer::Normal{mean:0.02, std:1.0}")]
     pub initializer: Initializer,
 }
@@ -179,6 +182,7 @@ pub struct DinoVisionTransformer<B: Backend> {
     blocks: Vec<Block<B>>,
     patch_size: usize,
     register_token_count: usize,
+    normalize_intermediate_tokens: bool,
 }
 
 impl<B: Backend> DinoVisionTransformer<B> {
@@ -267,6 +271,36 @@ impl<B: Backend> DinoVisionTransformer<B> {
             blocks,
             patch_size: config.patch_size,
             register_token_count,
+            normalize_intermediate_tokens: config.normalize_intermediate_tokens,
+        }
+    }
+
+    fn finalize_output(
+        &self,
+        tokens: Tensor<B, 3>,
+        masks: Option<Tensor<B, 3, Bool>>,
+    ) -> DinoOutput<B> {
+        let x_norm = self.norm.forward(tokens.clone());
+
+        let b_dim = tokens.shape().dims[0];
+        let n_dim = tokens.shape().dims[1];
+        let reg_count = self.register_token_count;
+
+        let x_norm_clstoken = x_norm.clone().slice([0..b_dim, 0..1]).squeeze_dim(1);
+        let x_norm_regtokens = if reg_count > 0 {
+            Some(x_norm.clone().slice([0..b_dim, 1..(1 + reg_count)]))
+        } else {
+            None
+        };
+        let patch_start = 1 + reg_count;
+        let x_norm_patchtokens = x_norm.clone().slice([0..b_dim, patch_start..n_dim]);
+
+        DinoOutput {
+            x_norm_clstoken,
+            x_norm_patchtokens,
+            x_norm_regtokens,
+            x_prenorm: tokens,
+            masks,
         }
     }
 
@@ -363,57 +397,33 @@ impl<B: Backend> DinoVisionTransformer<B> {
         &self,
         x: Tensor<B, 4>,
         layers: &[usize],
-    ) -> (Vec<Tensor<B, 2>>, Vec<Tensor<B, 3>>) {
+    ) -> (DinoOutput<B>, Vec<Tensor<B, 3>>) {
         let mut tokens = self.prepare_tokens_with_masks(x, None);
-
-        let mut class_tokens = Vec::with_capacity(layers.len());
         let mut outputs = Vec::with_capacity(layers.len());
 
         for (index, block) in self.blocks.iter().enumerate() {
             tokens = block.forward(tokens);
 
             if layers.contains(&index) {
-                let normalized = self.norm.forward(tokens.clone());
-                let cls = normalized
-                    .clone()
-                    .slice([0..normalized.shape().dims[0], 0..1])
-                    .squeeze_dim(1);
-                class_tokens.push(cls);
-                outputs.push(normalized);
+                if self.normalize_intermediate_tokens {
+                    outputs.push(self.norm.forward(tokens.clone()));
+                } else {
+                    outputs.push(tokens.clone());
+                }
             }
         }
 
-        (class_tokens, outputs)
+        let output = self.finalize_output(tokens, None);
+        (output, outputs)
     }
 
     pub fn forward(&self, x: Tensor<B, 4>, masks: Option<Tensor<B, 3, Bool>>) -> DinoOutput<B> {
-        let mut x = self.prepare_tokens_with_masks(x, None);
+        let mut tokens = self.prepare_tokens_with_masks(x, None);
 
         for block in &self.blocks {
-            x = block.forward(x);
+            tokens = block.forward(tokens);
         }
 
-        let x_norm = self.norm.forward(x.clone());
-
-        let b_dim = x.shape().dims[0];
-        let n_dim = x.shape().dims[1];
-        let reg_count = self.register_token_count;
-
-        let x_norm_clstoken = x_norm.clone().slice([0..b_dim, 0..1]).squeeze_dim(1);
-        let x_norm_regtokens = if reg_count > 0 {
-            Some(x_norm.clone().slice([0..b_dim, 1..(1 + reg_count)]))
-        } else {
-            None
-        };
-        let patch_start = 1 + reg_count;
-        let x_norm_patchtokens = x_norm.clone().slice([0..b_dim, patch_start..n_dim]);
-
-        DinoOutput {
-            x_norm_clstoken,
-            x_norm_patchtokens,
-            x_norm_regtokens,
-            x_prenorm: x,
-            masks,
-        }
+        self.finalize_output(tokens, masks)
     }
 }
