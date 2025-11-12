@@ -277,10 +277,6 @@ impl<B: Backend> DinoVisionTransformer<B> {
         let tokens_start = 1 + register_offset;
         let N = self.pos_embed.shape().dims[1] - tokens_start;
 
-        if npatch == N && W == H {
-            return self.pos_embed.val().clone();
-        }
-
         let b_dim = self.pos_embed.shape().dims[0];
         let n_dim = self.pos_embed.shape().dims[1];
         // let c_dim: usize = self.pos_embed.shape().dims[2];
@@ -296,6 +292,11 @@ impl<B: Backend> DinoVisionTransformer<B> {
             .val()
             .clone()
             .slice([0..b_dim, tokens_start..n_dim]);
+
+        if npatch == N && W == H {
+            return Tensor::cat(vec![class_pos_embed.unsqueeze_dim(0), patch_pos_embed], 1);
+        }
+
         let dim = x.shape().dims[2];
         let M = N.isqrt();
 
