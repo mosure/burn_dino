@@ -20,7 +20,7 @@ default = ["native"]
 
 fusion_backend = ["burn/fusion"]
 
-native = ["burn/autotune", "futures", "nokhwa", "fusion_backend"]
+native = ["futures", "nokhwa", "fusion_backend"]
 web = []
 
 editor = []
@@ -30,7 +30,7 @@ perftest = []
 
 [dependencies]
 bevy_args = "2.0"
-bevy_burn = "0.4"
+bevy_burn = "0.4.7"
 burn_dino = { path = "../../", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 futures = { version = "0.3", optional = true }
@@ -76,8 +76,43 @@ features = [
   # "fusion",
   "std",
   # "template",
-  "wgpu",
+  # "wgpu",
 ]
+
+[dependencies.burn-cubecl-fusion]
+version = "0.19"
+default-features = false
+features = [
+  "std",
+  # "std",
+]
+
+
+[dependencies.burn-wgpu]
+version = "0.19"
+default-features = false
+features = [
+  "fusion",
+  # "std",
+  # "template",
+]
+
+# [dependencies.cubecl]
+# version = "0.8"
+# default-features = false
+# features = [
+#   "std",
+#   # "template",
+# ]
+
+# [dependencies.cubecl-runtime]
+# version = "0.8"
+# default-features = false
+# features = [
+#   # "std",
+#   "channel-mpsc",
+#   # "template",
+# ]
 
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

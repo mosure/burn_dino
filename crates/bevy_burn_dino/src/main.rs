@@ -18,14 +18,13 @@ use bevy::{
     },
     tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task},
     ui::widget::ImageNode,
-    window::WindowResolution,
 };
 use bevy_args::{parse_args, Deserialize, Parser, Serialize, ValueEnum};
 use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, TransferKind};
-use burn::{
-    backend::wgpu::graphics::AutoGraphicsApi,
-    backend::wgpu::{init_setup_async, Wgpu},
-    prelude::*,
+use burn::prelude::*;
+use burn_wgpu::{
+    graphics::AutoGraphicsApi,
+    init_setup_async, Wgpu,
 };
 
 use burn_dino::model::{
