@@ -13,6 +13,7 @@ keywords = [
 categories = [
   "computer-vision",
 ]
+default-run = "bevy_burn_dino"
 
 
 [features]
@@ -30,7 +31,7 @@ perftest = []
 
 [dependencies]
 bevy_args = "2.0"
-bevy_burn = "0.4.7"
+bevy_burn = "0.4.9"
 burn_dino = { path = "../../", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 futures = { version = "0.3", optional = true }

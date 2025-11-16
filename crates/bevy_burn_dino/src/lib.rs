@@ -82,11 +82,11 @@ pub async fn process_frame<B: Backend>(
 
     for i in 0..3 {
         let slice = pca_features.clone().slice([0..n_samples, i..i + 1]);
-        let slice_min = slice.clone().min();
-        let slice_max = slice.clone().max();
+
         let scaled = slice
-            .sub(slice_min.clone().unsqueeze())
-            .div((slice_max - slice_min).unsqueeze());
+            .add_scalar(25.0)
+            .div_scalar(50)
+            .clamp(0.0, 1.0);
 
         pca_features = pca_features.slice_assign([0..n_samples, i..i + 1], scaled);
     }
@@ -95,11 +95,11 @@ pub async fn process_frame<B: Backend>(
     pca_features = pca_features.permute([0, 3, 1, 2]);
 
     let upsample: Interpolate2d = Interpolate2dConfig {
-        output_size: Some([dino_config.image_size, dino_config.image_size]),
-        scale_factor: None,
-        mode: InterpolateMode::Cubic,
-    }
-    .init();
+            output_size: Some([dino_config.image_size, dino_config.image_size]),
+            scale_factor: None,
+            mode: InterpolateMode::Linear,
+        }
+        .init();
     let pca_features = upsample.forward(pca_features).permute([0, 2, 3, 1]);
 
     let rgb = pca_features.squeeze_dim(0);

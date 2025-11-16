@@ -9,6 +9,7 @@ use bevy::{
         Diagnostic, DiagnosticPath, Diagnostics, DiagnosticsStore, FrameTimeDiagnosticsPlugin,
         RegisterDiagnostic,
     },
+    ecs::schedule::common_conditions::resource_exists,
     ecs::world::CommandQueue,
     prelude::*,
     render::{
@@ -16,16 +17,13 @@ use bevy::{
         settings::{RenderCreation, WgpuFeatures, WgpuSettings},
         RenderPlugin,
     },
-    tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, Task},
+    tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, IoTaskPool, Task},
     ui::widget::ImageNode,
 };
 use bevy_args::{parse_args, Deserialize, Parser, Serialize, ValueEnum};
-use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, TransferKind};
+use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, BurnDevice, TransferKind};
 use burn::prelude::*;
-use burn_wgpu::{
-    graphics::AutoGraphicsApi,
-    init_setup_async, Wgpu,
-};
+use burn_wgpu::Wgpu;
 
 use burn_dino::model::{
     dino::{DinoVisionTransformer, DinoVisionTransformerConfig},
@@ -101,7 +99,7 @@ mod io {
         device: &B::Device,
     ) -> DinoVisionTransformer<B> {
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(DINO_STATE_ENCODED.to_vec(), &Default::default())
+            .load(DINO_STATE_ENCODED.to_vec(), device)
             .expect("failed to decode state");
 
         let model = config.init(device);
@@ -120,7 +118,7 @@ mod io {
         };
 
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(data.to_vec(), &Default::default())
+            .load(data.to_vec(), device)
             .expect("failed to decode state");
 
         let model = config.init(device);
@@ -169,7 +167,7 @@ mod io {
         uint8_array.copy_to(&mut data[..]);
 
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(data, &Default::default())
+            .load(data, device)
             .expect("failed to decode state");
 
         let model = config.init(device);
@@ -205,7 +203,7 @@ mod io {
         uint8_array.copy_to(&mut data[..]);
 
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(data, &Default::default())
+            .load(data, device)
             .expect("failed to decode state");
 
         let model = config.init(device);
@@ -231,8 +229,22 @@ struct PcaFeatures {
     entity: Option<Entity>,
 }
 
+#[derive(Resource)]
+struct ModelLoadTask(Task<LoadedModels>);
+
+struct LoadedModels {
+    config: DinoVisionTransformerConfig,
+    device: <Wgpu as Backend>::Device,
+    dino: Arc<Mutex<DinoVisionTransformer<Wgpu>>>,
+    pca: Arc<Mutex<PcaTransform<Wgpu>>>,
+}
+
 #[derive(Component)]
 struct ProcessImage(Task<CommandQueue>);
+
+const fn default_transfer_kind() -> TransferKind {
+    TransferKind::Gpu
+}
 
 fn process_frames(
     mut commands: Commands,
@@ -265,8 +277,13 @@ fn process_frames(
         let task = thread_pool.spawn({
             let device_clone = device.clone();
             async move {
-                let tensor =
-                    process_frame(image, dino_config, dino_model, pca_model, device_clone).await;
+                let tensor = process_frame(
+                        image,
+                        dino_config,
+                        dino_model,
+                        pca_model,
+                        device_clone
+                    ).await;
 
                 let mut command_queue = CommandQueue::default();
                 command_queue.push(move |world: &mut World| {
@@ -313,22 +330,11 @@ fn handle_tasks(
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn pca_image_setup() -> (&'static [u8], TextureFormat, TransferKind, TextureUsages) {
-    (
-        &[0u8; 4],
-        TextureFormat::Rgba8UnormSrgb,
-        TransferKind::Cpu,
-        TextureUsages::COPY_SRC | TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING,
-    )
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn pca_image_setup() -> (&'static [u8], TextureFormat, TransferKind, TextureUsages) {
     (
         &[0u8; 16],
         TextureFormat::Rgba32Float,
-        TransferKind::Gpu,
+        default_transfer_kind(),
         TextureUsages::COPY_SRC
             | TextureUsages::COPY_DST
             | TextureUsages::TEXTURE_BINDING
@@ -341,7 +347,16 @@ fn setup_ui(
     dino: Res<DinoModel<Wgpu>>,
     mut pca_image: ResMut<PcaFeatures>,
     mut images: ResMut<Assets<Image>>,
+    burn_device: Res<BurnDevice>,
 ) {
+    if pca_image.entity.is_some() {
+        return;
+    }
+
+    let Some(device) = burn_device.device() else {
+        return;
+    };
+
     let size = Extent3d {
         width: dino.config.image_size as u32,
         height: dino.config.image_size as u32,
@@ -376,7 +391,7 @@ fn setup_ui(
                         bevy_image: pca_image.image.clone(),
                         tensor: Tensor::<Wgpu, 3>::zeros(
                             [dino.config.image_size, dino.config.image_size, 4],
-                            &dino.device,
+                            device,
                         ),
                         upload: true,
                         direction: BindingDirection::BurnToBevy,
@@ -417,7 +432,7 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
     let primary_window = Some(Window {
         mode: bevy::window::WindowMode::Windowed,
         prevent_default_event_handling: false,
-        resolution: WindowResolution::new(1024, 1024),
+        resolution: bevy::window::WindowResolution::new(1024, 1024),
         title,
 
         #[cfg(feature = "perftest")]
@@ -523,6 +538,84 @@ fn fps_update_system(
     }
 }
 
+fn burn_device_ready(burn_device: Option<Res<BurnDevice>>) -> bool {
+    burn_device
+        .map(|device| device.is_ready())
+        .unwrap_or(false)
+}
+
+fn models_not_loaded(dino: Option<Res<DinoModel<Wgpu>>>) -> bool {
+    dino.is_none()
+}
+
+fn start_model_loading(
+    mut commands: Commands,
+    args: Res<BevyBurnDinoConfig>,
+    burn_device: Res<BurnDevice>,
+    existing_task: Option<Res<ModelLoadTask>>,
+    existing_model: Option<Res<DinoModel<Wgpu>>>,
+) {
+    if existing_task.is_some() {
+        return;
+    }
+    if existing_model.is_some() {
+        return;
+    }
+
+    let Some(device) = burn_device.device() else {
+        return;
+    };
+    let device = device.clone();
+
+    log("spawning async model loading task");
+
+    let config = DinoVisionTransformerConfig {
+        register_token_count: 0,
+        use_register_tokens: false,
+        normalize_intermediate_tokens: false,
+        ..DinoVisionTransformerConfig::vits(Some(MODEL_IMAGE_SIZE), None)
+    };
+    let pca_config = PcaTransformConfig::new(config.embedding_dimension, 3);
+    let pca_type = args.pca_type.clone();
+
+    let task = IoTaskPool::get().spawn(async move {
+        let dino = io::load_model::<Wgpu>(&config, &device).await;
+        let pca_transform = io::load_pca_model::<Wgpu>(&pca_config, pca_type, &device).await;
+
+        LoadedModels {
+            config,
+            device,
+            dino: Arc::new(Mutex::new(dino)),
+            pca: Arc::new(Mutex::new(pca_transform)),
+        }
+    });
+
+    commands.insert_resource(ModelLoadTask(task));
+}
+
+fn finish_model_loading(mut commands: Commands, task: Option<ResMut<ModelLoadTask>>) {
+    let Some(mut task) = task else {
+        return;
+    };
+
+    if let Some(models) = block_on(future::poll_once(&mut task.0)) {
+        log("model loading completed");
+        let LoadedModels {
+            config,
+            device,
+            dino,
+            pca,
+        } = models;
+        commands.insert_resource(DinoModel {
+            config,
+            device: device.clone(),
+            model: dino,
+        });
+        commands.insert_resource(PcaTransformModel { model: pca });
+        commands.remove_resource::<ModelLoadTask>();
+    }
+}
+
 async fn run_app() {
     log("running app...");
 
@@ -532,42 +625,30 @@ async fn run_app() {
         "using fixed inference resolution of {MODEL_IMAGE_SIZE}x{MODEL_IMAGE_SIZE}"
     ));
 
-    let device = Default::default();
-    init_setup_async::<AutoGraphicsApi>(&device, Default::default()).await;
-
-    log("device created");
-
-    let config = DinoVisionTransformerConfig {
-        register_token_count: 0,
-        use_register_tokens: false,
-        normalize_intermediate_tokens: false,
-        ..DinoVisionTransformerConfig::vits(Some(MODEL_IMAGE_SIZE), None)
-    };
-    let dino = io::load_model::<Wgpu>(&config, &device).await;
-
-    log("dino model loaded");
-
-    // TODO: support adaptive PCA
-    let pca_config = PcaTransformConfig::new(config.embedding_dimension, 3);
-    let pca_transform =
-        io::load_pca_model::<Wgpu>(&pca_config, args.pca_type.clone(), &device).await;
-
-    log("pca model loaded");
-
     let mut app = viewer_app(args);
 
     app.init_resource::<PcaFeatures>();
-    app.insert_resource(DinoModel {
-        config,
-        device: device.clone(),
-        model: Arc::new(Mutex::new(dino)),
-    });
-    app.insert_resource(PcaTransformModel {
-        model: Arc::new(Mutex::new(pca_transform)),
-    });
-
-    app.add_systems(Startup, setup_ui);
-    app.add_systems(Update, (handle_tasks, process_frames));
+    app.add_systems(
+        Update,
+        start_model_loading
+            .run_if(burn_device_ready)
+            .run_if(models_not_loaded),
+    );
+    app.add_systems(Update, finish_model_loading);
+    app.add_systems(
+        Update,
+        setup_ui
+            .run_if(resource_exists::<DinoModel<Wgpu>>)
+            .run_if(resource_exists::<PcaTransformModel<Wgpu>>)
+            .run_if(burn_device_ready),
+    );
+    app.add_systems(Update, handle_tasks);
+    app.add_systems(
+        Update,
+        process_frames
+            .run_if(resource_exists::<DinoModel<Wgpu>>)
+            .run_if(resource_exists::<PcaTransformModel<Wgpu>>),
+    );
 
     log("running bevy app...");
 
