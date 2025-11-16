@@ -1,11 +1,6 @@
-use burn::{
-    prelude::*,
-    module::Param,
-    nn::Initializer,
-};
+use burn::{module::Param, nn::Initializer, prelude::*};
 
-
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct LayerNormConfig {
     pub dim: usize,
 }
@@ -22,7 +17,6 @@ impl LayerNormConfig {
     }
 }
 
-
 #[derive(Module, Debug)]
 pub struct LayerNorm<B: Backend> {
     pub gamma: Param<Tensor<B, 1>>,
@@ -30,17 +24,11 @@ pub struct LayerNorm<B: Backend> {
 }
 
 impl<B: Backend> LayerNorm<B> {
-    pub fn new(
-        device: &B::Device,
-        config: &LayerNormConfig,
-    ) -> Self {
+    pub fn new(device: &B::Device, config: &LayerNormConfig) -> Self {
         let gamma = Initializer::Ones.init([config.dim], device);
         let beta = Initializer::Zeros.init([config.dim], device);
 
-        Self {
-            gamma,
-            beta,
-        }
+        Self { gamma, beta }
     }
 
     pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
@@ -50,7 +38,7 @@ impl<B: Backend> LayerNorm<B> {
         let diff = x.clone().sub(mean);
         let var = diff.clone().powi_scalar(2).sum_dim(D - 1).div_scalar(n);
 
-        let input_normalized = diff.div(var.add_scalar(1e-5).sqrt());
+        let input_normalized = diff.div(var.add_scalar(1e-6).sqrt());
 
         // TODO: numerically different than torch layernorm, write test
         input_normalized

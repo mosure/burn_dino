@@ -1,11 +1,6 @@
-use burn::{
-    prelude::*,
-    module::Param,
-    nn::Initializer,
-};
+use burn::{module::Param, nn::Initializer, prelude::*};
 
-
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct LayerScaleConfig {
     pub dim: usize,
 }
@@ -22,22 +17,16 @@ impl LayerScaleConfig {
     }
 }
 
-
 #[derive(Module, Debug)]
 pub struct LayerScale<B: Backend, const D: usize> {
     pub gamma: Param<Tensor<B, 1>>,
 }
 
 impl<B: Backend, const D: usize> LayerScale<B, D> {
-    pub fn new(
-        device: &B::Device,
-        config: &LayerScaleConfig,
-    ) -> Self {
+    pub fn new(device: &B::Device, config: &LayerScaleConfig) -> Self {
         let gamma = Initializer::Constant { value: 1e-5 }.init([config.dim], device);
 
-        Self {
-            gamma,
-        }
+        Self { gamma }
     }
 
     pub fn forward(&self, x: Tensor<B, D>) -> Tensor<B, D> {

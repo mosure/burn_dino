@@ -1,22 +1,13 @@
+use bhtsne::tSNE;
 use burn::{
-    prelude::*,
     backend::wgpu::Wgpu,
+    prelude::*,
     record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
 };
-use image::{
-    load_from_memory_with_format,
-    DynamicImage,
-    ImageFormat,
-    RgbImage,
-};
-use bhtsne::tSNE;
+use image::{DynamicImage, ImageFormat, RgbImage, load_from_memory_with_format};
 use ndarray::Array2;
 
-use burn_dino::model::dino::{
-    DinoVisionTransformer,
-    DinoVisionTransformerConfig,
-};
-
+use burn_dino::model::dino::{DinoVisionTransformer, DinoVisionTransformerConfig};
 
 static STATE_ENCODED: &[u8] = include_bytes!("../assets/models/dinov2.mpk");
 
@@ -24,7 +15,6 @@ static INPUT_IMAGE_0: &[u8] = include_bytes!("../assets/images/dino_0.png");
 static INPUT_IMAGE_1: &[u8] = include_bytes!("../assets/images/dino_1.png");
 static INPUT_IMAGE_2: &[u8] = include_bytes!("../assets/images/dino_2.png");
 static INPUT_IMAGE_3: &[u8] = include_bytes!("../assets/images/dino_3.png");
-
 
 pub fn load_model<B: Backend>(
     config: &DinoVisionTransformerConfig,
@@ -34,15 +24,11 @@ pub fn load_model<B: Backend>(
         .load(STATE_ENCODED.to_vec(), &Default::default())
         .expect("failed to decode state");
 
-    let model= config.init(device);
+    let model = config.init(device);
     model.load_record(record)
 }
 
-
-fn normalize<B: Backend>(
-    input: Tensor<B, 4>,
-    device: &B::Device,
-) -> Tensor<B, 4> {
+fn normalize<B: Backend>(input: Tensor<B, 4>, device: &B::Device) -> Tensor<B, 4> {
     let mean: Tensor<B, 1> = Tensor::from_floats([0.485, 0.456, 0.406], device);
     let std: Tensor<B, 1> = Tensor::from_floats([0.229, 0.224, 0.225], device);
 
@@ -60,7 +46,11 @@ pub fn load_image<B: Backend>(
 ) -> Tensor<B, 4> {
     let img = load_from_memory_with_format(bytes, ImageFormat::Png)
         .unwrap()
-        .resize_exact(config.image_size as u32, config.image_size as u32, image::imageops::FilterType::Lanczos3);
+        .resize_exact(
+            config.image_size as u32,
+            config.image_size as u32,
+            image::imageops::FilterType::Lanczos3,
+        );
 
     let img = match img {
         DynamicImage::ImageRgb8(img) => img,
@@ -72,16 +62,17 @@ pub fn load_image<B: Backend>(
         .flat_map(|p| p.0.iter().map(|&c| c as f32 / 255.0))
         .collect();
 
-    let input: Tensor<B, 1> = Tensor::from_floats(
-        img_data.as_slice(),
-        device,
-    );
+    let input: Tensor<B, 1> = Tensor::from_floats(img_data.as_slice(), device);
 
-    let input = input.reshape([1, config.input_channels, config.image_size, config.image_size]);
+    let input = input.reshape([
+        1,
+        config.input_channels,
+        config.image_size,
+        config.image_size,
+    ]);
 
     normalize(input, device)
 }
-
 
 fn main() {
     let device = Default::default();
@@ -109,19 +100,16 @@ fn main() {
     let spatial_size = elements.isqrt();
 
     let x = output.reshape([n_samples, features]);
-    let binding = x.to_data()
-        .to_vec::<f32>()
-        .unwrap();
-    let data: Vec<&[f32]> = binding
-        .chunks(config.embedding_dimension)
-        .collect();
+    let binding = x.to_data().to_vec::<f32>().unwrap();
+    let data: Vec<&[f32]> = binding.chunks(config.embedding_dimension).collect();
 
     let tsne_features = tSNE::new(&data)
         .embedding_dim(3)
         .perplexity(10.0)
         .epochs(1000)
         .barnes_hut(0.5, |sample_a, sample_b| {
-            sample_a.iter()
+            sample_a
+                .iter()
                 .zip(sample_b.iter())
                 .map(|(a, b)| (a - b).powi(2))
                 .sum::<f32>()
@@ -137,20 +125,16 @@ fn main() {
         col.mapv_inplace(|x| (x - min) / range);
     }
 
-    let tsne_features = tsne_features.to_shape([batch, spatial_size, spatial_size, 3]).unwrap();
+    let tsne_features = tsne_features
+        .to_shape([batch, spatial_size, spatial_size, 3])
+        .unwrap();
 
     for (i, img) in tsne_features.outer_iter().enumerate() {
-        let collected: Vec<u8> = img.iter()
-            .map(|&x| (x * 255.0)
-                .max(0.0)
-                .min(255.0) as u8
-            ).collect();
-        let img = RgbImage::from_raw(
-                spatial_size as u32,
-                spatial_size as u32,
-                collected,
-            )
-            .unwrap();
+        let collected: Vec<u8> = img
+            .iter()
+            .map(|&x| (x * 255.0).max(0.0).min(255.0) as u8)
+            .collect();
+        let img = RgbImage::from_raw(spatial_size as u32, spatial_size as u32, collected).unwrap();
 
         let output_directory = std::path::Path::new("output/tsne");
         std::fs::create_dir_all(output_directory).unwrap();

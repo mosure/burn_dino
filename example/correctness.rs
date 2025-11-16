@@ -1,157 +1,80 @@
-use burn::{
-    prelude::*,
-    backend::wgpu::Wgpu,
-    record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
-};
-use image::{
-    load_from_memory_with_format, DynamicImage, GenericImageView, ImageFormat,
-};
-use safetensors::tensor::SafeTensors;
+use std::{env, error::Error, path::PathBuf};
 
-use burn_dino::model::dino::{
-    DinoVisionTransformer,
-    DinoVisionTransformerConfig,
+use burn::{backend::ndarray::NdArray, tensor::backend::Backend};
+use burn_dino::{
+    correctness::{self, CorrectnessReference},
+    model::dino::DinoVisionTransformerConfig,
 };
 
+type InferenceBackend = NdArray<f32>;
 
-static STATE_ENCODED: &[u8] = include_bytes!("../assets/models/dinov2.mpk");
-static INPUT_IMAGE_0: &[u8] = include_bytes!("../assets/images/dino_0.png");
-static STANDARD_OUTPUT: &[u8] = include_bytes!("../assets/tensors/dino_0_small.st");
+fn main() -> Result<(), Box<dyn Error>> {
+    let checkpoint_path = env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("assets/models/dinov2.mpk"));
+    let reference_path = env::args()
+        .nth(2)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("assets/correctness/dinov2_vits14_reference.safetensors"));
 
+    let device = <InferenceBackend as Backend>::Device::default();
+    let config = DinoVisionTransformerConfig::vits(None, None);
 
-pub fn load_model<B: Backend>(
-    config: &DinoVisionTransformerConfig,
-    device: &B::Device,
-) -> DinoVisionTransformer<B> {
-    let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-        .load(STATE_ENCODED.to_vec(), &Default::default())
-        .expect("failed to decode state");
+    println!("Loading Burn checkpoint from {}", checkpoint_path.display());
+    println!("Using Torch reference from {}", reference_path.display());
 
-    let model= config.init(device);
-    model.load_record(record)
-}
+    let reference = CorrectnessReference::load(&reference_path)?;
+    let model = correctness::load_model_from_checkpoint::<InferenceBackend>(
+        &config,
+        &checkpoint_path,
+        &device,
+    )?;
+    let stats = correctness::run_correctness(&model, &reference, &device)?;
 
-
-fn center_crop(image: &DynamicImage, crop_width: u32, crop_height: u32) -> DynamicImage {
-    let (img_width, img_height) = image.dimensions();
-
-    let crop_width = crop_width.min(img_width);
-    let crop_height = crop_height.min(img_height);
-
-    let x = (img_width - crop_width) / 2;
-    let y = (img_height - crop_height) / 2;
-
-    image.crop_imm(x, y, crop_width, crop_height)
-}
-
-fn normalize<B: Backend>(
-    input: Tensor<B, 4>,
-    device: &B::Device,
-) -> Tensor<B, 4> {
-    let mean: Tensor<B, 1> = Tensor::from_floats([0.485, 0.456, 0.406], device);
-    let std: Tensor<B, 1> = Tensor::from_floats([0.229, 0.224, 0.225], device);
-
-    input
-        .permute([0, 2, 3, 1])
-        .sub(mean.unsqueeze())
-        .div(std.unsqueeze())
-        .permute([0, 3, 1, 2])
-}
-
-fn load_image<B: Backend>(
-    bytes: &[u8],
-    config: &DinoVisionTransformerConfig,
-    device: &B::Device,
-) -> Tensor<B, 4> {
-    let img = load_from_memory_with_format(bytes, ImageFormat::Png)
-        .unwrap()
-        .resize_exact(config.image_size as u32 + 2, config.image_size as u32 + 2, image::imageops::FilterType::Lanczos3);
-    let img = center_crop(&img, config.image_size as u32, config.image_size as u32);
-
-    let img_data: Vec<f32> = img.to_rgb32f()
-        .pixels()
-        .flat_map(|p| p.0)
-        .collect();
-
-    let input: Tensor<B, 1> = Tensor::from_floats(
-        img_data.as_slice(),
-        device,
+    println!(
+        "Patch tokens -> mean_abs: {:.6}, max_abs: {:.6}, mse: {:.6}",
+        stats.patch_tokens.mean_abs, stats.patch_tokens.max_abs, stats.patch_tokens.mse
     );
+    println!(
+        "Cls token    -> mean_abs: {:.6}, max_abs: {:.6}, mse: {:.6}",
+        stats.cls_token.mean_abs, stats.cls_token.max_abs, stats.cls_token.mse
+    );
+    if let Some(reg) = stats.register_tokens.as_ref() {
+        println!(
+            "Register tok -> mean_abs: {:.6}, max_abs: {:.6}, mse: {:.6}",
+            reg.mean_abs, reg.max_abs, reg.mse
+        );
+    }
 
-    let input = input.reshape([1, config.image_size, config.image_size, config.input_channels])
-        .permute([0, 3, 1, 2]);
+    if stats.within_defaults() {
+        println!("Burn output matches Torch reference within tolerance.");
+        return Ok(());
+    }
 
-    normalize(input, device)
-}
+    if let Ok(outputs) = correctness::collect_outputs(&model, &reference, &device) {
+        for idx in 0..5 {
+            println!(
+                "patch[{idx}]: burn={:.6}, torch={:.6}, diff={:.6}",
+                outputs.burn_patchtokens[idx],
+                outputs.torch_patchtokens[idx],
+                outputs.burn_patchtokens[idx] - outputs.torch_patchtokens[idx]
+            );
+        }
 
+        if let Some((max_idx, max_value, burn, torch)) = outputs
+            .burn_patchtokens
+            .iter()
+            .zip(outputs.torch_patchtokens.iter())
+            .enumerate()
+            .map(|(idx, (b, t))| (idx, (b - t).abs(), *b, *t))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+        {
+            println!(
+                "max diff patch[{max_idx}]: burn={burn:.6}, torch={torch:.6}, diff={max_value:.6}"
+            );
+        }
+    }
 
-fn main() {
-    let device = Default::default();
-    let config = DinoVisionTransformerConfig {
-        ..DinoVisionTransformerConfig::vits(None, None)
-    };
-    let dino = load_model::<Wgpu>(&config, &device);
-
-    // let debug_output = SafeTensors::deserialize(STANDARD_OUTPUT).unwrap();
-    // let input = debug_output.tensor("input").unwrap();
-    // let standard_input: Vec<f32> = input
-    //     .data()
-    //     .chunks_exact(4)
-    //     .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
-    //     .collect();
-    // let standard_input_tensor = Tensor::<Wgpu, 1>::from_floats(standard_input.as_slice(), &device)
-    //     .reshape([1, config.input_channels, config.image_size, config.image_size]);
-    // let input_tensor = standard_input_tensor.clone();
-
-    let input_tensor: Tensor<Wgpu, 4> = load_image(INPUT_IMAGE_0, &config, &device);
-
-    // let standard_diff = input_tensor.clone().sub(standard_input_tensor.clone()).abs();
-    // let min_diff = standard_diff.clone().min();
-    // let max_diff = standard_diff.clone().max();
-    // let range = max_diff - min_diff;
-    // let standard_diff_min_max_norm = standard_diff.clone().div_scalar(range.into_scalar());
-
-    // let standard_diff_min_max_norm_flat: Vec<f32> = standard_diff_min_max_norm.to_data().to_vec().unwrap();
-    // let standard_diff_min_max_norm_flat: Vec<u8> = standard_diff_min_max_norm_flat
-    //     .iter()
-    //     .map(|&v| (v * 255.0).round() as u8)
-    //     .collect();
-    // let img = RgbImage::from_raw(
-    //     config.image_size as u32,
-    //     config.image_size as u32,
-    //     standard_diff_min_max_norm_flat,
-    // ).unwrap();
-    // img.save("diff.png").unwrap();
-
-    // let diff_sum = standard_diff.sum().into_scalar();
-    // println!("diff sum: {}", diff_sum);
-
-    // assert!(
-    //     input_tensor.clone().all_close(standard_input_tensor, 2e-1.into(), None),
-    //     "input does not match torch reference",
-    // );
-
-    let output = dino.forward(input_tensor, None);
-    let x_norm_patchtokens = output.x_norm_patchtokens;
-    let x_norm_patchtokens_flat: Vec<f32> = x_norm_patchtokens.to_data().to_vec().unwrap();
-
-    let standard_output = SafeTensors::deserialize(STANDARD_OUTPUT)
-        .unwrap()
-        .tensor("output")
-        .unwrap();
-    let standard_output_tensor: Vec<f32> = standard_output
-        .data()
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
-
-    let mse: f32 = x_norm_patchtokens_flat
-        .iter()
-        .zip(standard_output_tensor.iter())
-        .map(|(a, b)| (a - b).powf(2.0))
-        .sum::<f32>() / x_norm_patchtokens_flat.len() as f32;
-
-    println!("(MSE): {}", mse);
-
-    assert!(mse < 2e-2, "output does not match torch reference");
+    Err("Burn output deviates from Torch reference beyond tolerance.".into())
 }

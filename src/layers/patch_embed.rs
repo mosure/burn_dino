@@ -1,7 +1,6 @@
 use burn::prelude::*;
 
-
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct PatchEmbedConfig {
     pub image_size: usize,
     pub patch_size: usize,
@@ -26,34 +25,26 @@ impl PatchEmbedConfig {
     }
 }
 
-
 #[derive(Module, Debug)]
 pub struct PatchEmbed<B: Backend> {
     proj: nn::conv::Conv2d<B>,
 }
 
 impl<B: Backend> PatchEmbed<B> {
-    pub fn new(
-        device: &B::Device,
-        config: PatchEmbedConfig,
-    ) -> Self {
+    pub fn new(device: &B::Device, config: PatchEmbedConfig) -> Self {
         let kernel_size = [config.patch_size, config.patch_size];
         let proj = nn::conv::Conv2dConfig::new(
-                [config.input_channels, config.embedding_dimension],
-                kernel_size,
-            )
-            .with_stride(kernel_size)
-            .init(device);
+            [config.input_channels, config.embedding_dimension],
+            kernel_size,
+        )
+        .with_stride(kernel_size)
+        .init(device);
 
-        Self {
-            proj,
-        }
+        Self { proj }
     }
 
     #[allow(non_snake_case)]
     pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 3> {
-        self.proj.forward(x)
-            .flatten(2, 3)
-            .swap_dims(1, 2)
+        self.proj.forward(x).flatten(2, 3).swap_dims(1, 2)
     }
 }

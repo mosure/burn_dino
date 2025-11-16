@@ -1,77 +1,42 @@
+#![recursion_limit = "256"]
+
 use std::sync::{Arc, Mutex};
 
+use bevy::asset::RenderAssetUsages;
 use bevy::{
-    prelude::*,
     color::palettes::css::GOLD,
     diagnostic::{
-        Diagnostic,
-        DiagnosticPath,
-        Diagnostics,
-        DiagnosticsStore,
-        FrameTimeDiagnosticsPlugin,
+        Diagnostic, DiagnosticPath, Diagnostics, DiagnosticsStore, FrameTimeDiagnosticsPlugin,
         RegisterDiagnostic,
     },
-    ecs::{system::SystemState, world::CommandQueue},
-    render::{
-        render_asset::RenderAssetUsages,
-        render_resource::{
-            Extent3d,
-            TextureDimension,
-            TextureFormat,
-        },
-        settings::{
-            RenderCreation,
-            WgpuFeatures,
-            WgpuSettings,
-        },
-        RenderPlugin,
-    }, tasks::{
-        block_on,
-        futures_lite::future,
-        AsyncComputeTaskPool,
-        Task,
-    },
-};
-use bevy_args::{
-    parse_args,
-    Deserialize,
-    Parser,
-    Serialize,
-    ValueEnum,
-};
-use burn::{
+    ecs::schedule::common_conditions::resource_exists,
+    ecs::world::CommandQueue,
     prelude::*,
-    backend::wgpu::{init_async, AutoGraphicsApi, Wgpu},
+    render::{
+        render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages},
+        settings::{RenderCreation, WgpuFeatures, WgpuSettings},
+        RenderPlugin,
+    },
+    tasks::{block_on, futures_lite::future, AsyncComputeTaskPool, IoTaskPool, Task},
+    ui::widget::ImageNode,
 };
+use bevy_args::{parse_args, Deserialize, Parser, Serialize, ValueEnum};
+use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, BurnDevice, TransferKind};
+use burn::prelude::*;
+use burn_wgpu::Wgpu;
 
 use burn_dino::model::{
-    dino::{
-        DinoVisionTransformer,
-        DinoVisionTransformerConfig,
-    },
-    pca::{
-        PcaTransform, PcaTransformConfig
-    },
+    dino::{DinoVisionTransformer, DinoVisionTransformerConfig},
+    pca::{PcaTransform, PcaTransformConfig},
 };
 
-use bevy_burn_dino::{
-    platform::camera::receive_image,
-    process_frame,
-};
+use bevy_burn_dino::{platform::camera::receive_image, process_frame};
 
+const MODEL_IMAGE_SIZE: usize = 518;
 
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Reflect,
-    ValueEnum,
-)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Reflect, ValueEnum)]
 pub enum PcaType {
-    Adaptive,  // TODO: window adaptive pca
+    Adaptive, // TODO: window adaptive pca
     #[default]
     Face,
     Person,
@@ -88,16 +53,7 @@ impl PcaType {
     }
 }
 
-
-#[derive(
-    Resource,
-    Clone,
-    Debug,
-    Serialize,
-    Deserialize,
-    Parser,
-    Reflect,
-)]
+#[derive(Resource, Clone, Debug, Serialize, Deserialize, Parser, Reflect)]
 #[reflect(Resource)]
 #[command(about = "bevy_burn_dino", version, long_about = None)]
 pub struct BevyBurnDinoConfig {
@@ -107,12 +63,6 @@ pub struct BevyBurnDinoConfig {
     #[arg(long, default_value = "true")]
     pub show_fps: bool,
 
-    #[arg(long, default_value = "518")]
-    pub inference_height: usize,
-
-    #[arg(long, default_value = "518")]
-    pub inference_width: usize,
-
     #[arg(long, value_enum, default_value_t = PcaType::Face)]
     pub pca_type: PcaType,
 }
@@ -121,45 +71,38 @@ impl Default for BevyBurnDinoConfig {
     fn default() -> Self {
         Self {
             press_esc_to_close: true,
-            show_fps: true,  // TODO: display inference fps (UI fps is decoupled via async compute pool)
-            inference_height: 518,
-            inference_width: 518,
+            show_fps: true, // TODO: display inference fps (UI fps is decoupled via async compute pool)
             pca_type: PcaType::default(),
         }
     }
 }
 
-
 #[cfg(feature = "native")]
 mod io {
+    use super::PcaType;
     use burn::{
         prelude::*,
         record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
     };
     use burn_dino::model::{
-        dino::{
-            DinoVisionTransformer,
-            DinoVisionTransformerConfig,
-        },
-        pca::{
-            PcaTransform, PcaTransformConfig
-        },
+        dino::{DinoVisionTransformer, DinoVisionTransformerConfig},
+        pca::{PcaTransform, PcaTransformConfig},
     };
-    use super::PcaType;
 
     static DINO_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/dinov2.mpk");
     static FACE_PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/face_pca.mpk");
-    static PERSON_PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/person_pca.mpk");
+    static PERSON_PCA_STATE_ENCODED: &[u8] =
+        include_bytes!("../../../assets/models/person_pca.mpk");
 
     pub async fn load_model<B: Backend>(
         config: &DinoVisionTransformerConfig,
         device: &B::Device,
     ) -> DinoVisionTransformer<B> {
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(DINO_STATE_ENCODED.to_vec(), &Default::default())
+            .load(DINO_STATE_ENCODED.to_vec(), device)
             .expect("failed to decode state");
 
-        let model= config.init(device);
+        let model = config.init(device);
         model.load_record(record)
     }
 
@@ -175,10 +118,10 @@ mod io {
         };
 
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(data.to_vec(), &Default::default())
+            .load(data.to_vec(), device)
             .expect("failed to decode state");
 
-        let model= config.init(device);
+        let model = config.init(device);
         model.load_record(record)
     }
 }
@@ -190,24 +133,13 @@ mod io {
         record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
     };
     use burn_dino::model::{
-        dino::{
-            DinoVisionTransformer,
-            DinoVisionTransformerConfig,
-        },
-        pca::{
-            PcaTransform, PcaTransformConfig
-        },
+        dino::{DinoVisionTransformer, DinoVisionTransformerConfig},
+        pca::{PcaTransform, PcaTransformConfig},
     };
     use js_sys::Uint8Array;
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
-    use web_sys::{
-        window,
-        Request,
-        RequestInit,
-        RequestMode,
-        Response,
-    };
+    use web_sys::{window, Request, RequestInit, RequestMode, Response};
 
     pub async fn load_model<B: Backend>(
         config: &DinoVisionTransformerConfig,
@@ -217,26 +149,28 @@ mod io {
         opts.set_method("GET");
         opts.set_mode(RequestMode::Cors);
 
-        let request = Request::new_with_str_and_init(
-            "./assets/models/dinov2.mpk",
-            &opts,
-        ).unwrap();
+        let request = Request::new_with_str_and_init("./assets/models/dinov2.mpk", &opts).unwrap();
 
         let window = window().unwrap();
         let resp_value = JsFuture::from(window.fetch_with_request(&request)).await;
         let resp: Response = resp_value.unwrap().dyn_into().unwrap();
 
-        let array_buffer = JsFuture::from(resp.array_buffer().expect("failed to download model weights")).await.unwrap();
+        let array_buffer = JsFuture::from(
+            resp.array_buffer()
+                .expect("failed to download model weights"),
+        )
+        .await
+        .unwrap();
         let uint8_array = Uint8Array::new(&array_buffer);
 
         let mut data = vec![0; uint8_array.length() as usize];
         uint8_array.copy_to(&mut data[..]);
 
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(data, &Default::default())
+            .load(data, device)
             .expect("failed to decode state");
 
-        let model= config.init(device);
+        let model = config.init(device);
         model.load_record(record)
     }
 
@@ -252,27 +186,30 @@ mod io {
         let request = Request::new_with_str_and_init(
             &format!("./assets/models/{}", pca_type.pca_weights_mpk()),
             &opts,
-        ).unwrap();
+        )
+        .unwrap();
 
         let window = window().unwrap();
         let resp_value = JsFuture::from(window.fetch_with_request(&request)).await;
         let resp: Response = resp_value.unwrap().dyn_into().unwrap();
 
-        let array_buffer = JsFuture::from(resp.array_buffer().expect("failed to download pca weights")).await.unwrap();
+        let array_buffer =
+            JsFuture::from(resp.array_buffer().expect("failed to download pca weights"))
+                .await
+                .unwrap();
         let uint8_array = Uint8Array::new(&array_buffer);
 
         let mut data = vec![0; uint8_array.length() as usize];
         uint8_array.copy_to(&mut data[..]);
 
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(data, &Default::default())
+            .load(data, device)
             .expect("failed to decode state");
 
-        let model= config.init(device);
+        let model = config.init(device);
         model.load_record(record)
     }
 }
-
 
 #[derive(Resource)]
 struct DinoModel<B: Backend> {
@@ -283,18 +220,31 @@ struct DinoModel<B: Backend> {
 
 #[derive(Resource)]
 struct PcaTransformModel<B: Backend> {
-    model: Arc::<Mutex::<PcaTransform<B>>>,
+    model: Arc<Mutex<PcaTransform<B>>>,
 }
-
 
 #[derive(Resource, Default)]
 struct PcaFeatures {
     image: Handle<Image>,
+    entity: Option<Entity>,
 }
 
+#[derive(Resource)]
+struct ModelLoadTask(Task<LoadedModels>);
+
+struct LoadedModels {
+    config: DinoVisionTransformerConfig,
+    device: <Wgpu as Backend>::Device,
+    dino: Arc<Mutex<DinoVisionTransformer<Wgpu>>>,
+    pca: Arc<Mutex<PcaTransform<Wgpu>>>,
+}
 
 #[derive(Component)]
 struct ProcessImage(Task<CommandQueue>);
+
+const fn default_transfer_kind() -> TransferKind {
+    TransferKind::Gpu
+}
 
 fn process_frames(
     mut commands: Commands,
@@ -303,6 +253,10 @@ fn process_frames(
     pca_features_handle: Res<PcaFeatures>,
     active_tasks: Query<&ProcessImage>,
 ) {
+    let Some(image_entity) = pca_features_handle.entity else {
+        return;
+    };
+
     // TODO: move to config
     // TODO: fix multiple in flight deadlock
     let inference_max_in_flight = 1;
@@ -312,43 +266,46 @@ fn process_frames(
 
     if let Some(image) = receive_image() {
         let thread_pool = AsyncComputeTaskPool::get();
-        let entity = commands.spawn_empty().id();
+        let task_entity = commands.spawn_empty().id();
 
         let device = dino_model.device.clone();
         let dino_config = dino_model.config.clone();
         let dino_model = dino_model.model.clone();
-        let image_handle = pca_features_handle.image.clone();
         let pca_model = pca_transform.model.clone();
+        let target_entity = image_entity;
 
-        let task = thread_pool.spawn(async move {
-            let img_data = process_frame(
-                image,
-                dino_config,
-                dino_model,
-                pca_model,
-                device,
-            ).await;
+        let task = thread_pool.spawn({
+            let device_clone = device.clone();
+            async move {
+                let tensor = process_frame(
+                        image,
+                        dino_config,
+                        dino_model,
+                        pca_model,
+                        device_clone
+                    ).await;
 
-            let mut command_queue = CommandQueue::default();
-            command_queue.push(move |world: &mut World| {
-                let mut system_state = SystemState::<
-                    ResMut<Assets<Image>>,
-                >::new(world);
-                let mut images = system_state.get_mut(world);
+                let mut command_queue = CommandQueue::default();
+                command_queue.push(move |world: &mut World| {
+                    if let Ok(mut image_entity_mut) = world.get_entity_mut(target_entity) {
+                        if let Some(mut handle) = image_entity_mut.get_mut::<BevyBurnHandle<Wgpu>>()
+                        {
+                            handle.tensor = tensor.clone();
+                            handle.upload = true;
+                        }
+                    }
 
-                // TODO: share wgpu io between bevy/burn
-                let existing_image = images.get_mut(&image_handle).unwrap();
-                existing_image.data = img_data;
+                    if let Ok(mut tracker) = world.get_entity_mut(task_entity) {
+                        tracker.remove::<ProcessImage>();
+                        tracker.despawn();
+                    }
+                });
 
-                world
-                    .entity_mut(entity)
-                    .remove::<ProcessImage>();
-            });
-
-            command_queue
+                command_queue
+            }
         });
 
-        commands.entity(entity).insert(ProcessImage(task));
+        commands.entity(task_entity).insert(ProcessImage(task));
     }
 }
 
@@ -373,40 +330,78 @@ fn handle_tasks(
     }
 }
 
+fn pca_image_setup() -> (&'static [u8], TextureFormat, TransferKind, TextureUsages) {
+    (
+        &[0u8; 16],
+        TextureFormat::Rgba32Float,
+        default_transfer_kind(),
+        TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::STORAGE_BINDING,
+    )
+}
 
 fn setup_ui(
     mut commands: Commands,
     dino: Res<DinoModel<Wgpu>>,
     mut pca_image: ResMut<PcaFeatures>,
     mut images: ResMut<Assets<Image>>,
+    burn_device: Res<BurnDevice>,
 ) {
-    pca_image.image = images.add(Image::new_fill(
-        Extent3d {
-            width: dino.config.image_size as u32,
-            height: dino.config.image_size as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &[0, 0, 0, 0],
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::all(),
-    ));
+    if pca_image.entity.is_some() {
+        return;
+    }
 
-    commands.spawn(Node {
-        display: Display::Grid,
-        width: Val::Percent(100.0),
-        height: Val::Percent(100.0),
-        grid_template_columns: RepeatedGridTrack::flex(1, 1.0),
-        grid_template_rows: RepeatedGridTrack::flex(1, 1.0),
-        ..default()
-    })
+    let Some(device) = burn_device.device() else {
+        return;
+    };
+
+    let size = Extent3d {
+        width: dino.config.image_size as u32,
+        height: dino.config.image_size as u32,
+        depth_or_array_layers: 1,
+    };
+    let (fill_bytes, texture_format, transfer_kind, texture_usage) = pca_image_setup();
+    let mut image = Image::new_fill(
+        size,
+        TextureDimension::D2,
+        fill_bytes,
+        texture_format,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.usage |= texture_usage;
+    pca_image.image = images.add(image);
+
+    let mut image_entity = None;
+    commands
+        .spawn(Node {
+            display: Display::Grid,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            grid_template_columns: RepeatedGridTrack::flex(1, 1.0),
+            grid_template_rows: RepeatedGridTrack::flex(1, 1.0),
+            ..default()
+        })
         .with_children(|builder| {
-            builder.spawn(UiImage {
-                image: pca_image.image.clone(),
-                image_mode: NodeImageMode::Stretch,
-                ..default()
-            });
+            let entity = builder
+                .spawn((
+                    ImageNode::new(pca_image.image.clone()).with_mode(NodeImageMode::Stretch),
+                    BevyBurnHandle::<Wgpu> {
+                        bevy_image: pca_image.image.clone(),
+                        tensor: Tensor::<Wgpu, 3>::zeros(
+                            [dino.config.image_size, dino.config.image_size, 4],
+                            device,
+                        ),
+                        upload: true,
+                        direction: BindingDirection::BurnToBevy,
+                        xfer: transfer_kind,
+                    },
+                ))
+                .id();
+            image_entity = Some(entity);
         });
+    pca_image.entity = image_entity;
 
     commands.spawn(Camera2d);
 }
@@ -437,7 +432,7 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
     let primary_window = Some(Window {
         mode: bevy::window::WindowMode::Windowed,
         prevent_default_event_handling: false,
-        resolution: (1024.0, 1024.0).into(),
+        resolution: bevy::window::WindowResolution::new(1024, 1024),
         title,
 
         #[cfg(feature = "perftest")]
@@ -450,13 +445,12 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
 
     app.insert_resource(ClearColor(Color::srgba(0.0, 0.0, 0.0, 0.0)));
 
-
     let default_plugins = DefaultPlugins
         .set(ImagePlugin::default_nearest())
         .set(RenderPlugin {
             render_creation: RenderCreation::Automatic(WgpuSettings {
-                features: WgpuFeatures::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
-                        | WgpuFeatures::SHADER_F16,
+                // Request only cross-adapter-safe features. Some drivers do not expose SHADER_F16.
+                features: WgpuFeatures::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
                 ..Default::default()
             }),
             ..Default::default()
@@ -467,6 +461,7 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
         });
 
     app.add_plugins(default_plugins);
+    app.add_plugins(BevyBurnBridgePlugin::<Wgpu>::default());
 
     #[cfg(feature = "editor")]
     if args.editor {
@@ -480,7 +475,7 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
     }
 
     if args.show_fps {
-        app.add_plugins(FrameTimeDiagnosticsPlugin);
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         app.register_diagnostic(Diagnostic::new(INFERENCE_FPS));
         app.add_systems(Startup, fps_display_setup);
         app.add_systems(Update, fps_update_system);
@@ -489,47 +484,42 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
     app
 }
 
-fn press_esc_close(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut exit: EventWriter<AppExit>
-) {
+fn press_esc_close(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit>) {
     if keys.just_pressed(KeyCode::Escape) {
-        exit.send(AppExit::Success);
+        exit.write(AppExit::Success);
     }
 }
 
-
 const INFERENCE_FPS: DiagnosticPath = DiagnosticPath::const_new("inference_fps");
 
-fn fps_display_setup(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-) {
-    commands.spawn((
-        Text("fps: ".to_string()),
-        TextFont {
-            font: asset_server.load("fonts/Caveat-Bold.ttf"),
-            font_size: 60.0,
-            ..Default::default()
-        },
-        TextColor(Color::WHITE),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(5.0),
-            left: Val::Px(15.0),
-            ..default()
-        },
-        ZIndex(2),
-    )).with_child((
-        FpsText,
-        TextColor(Color::Srgba(GOLD)),
-        TextFont {
-            font: asset_server.load("fonts/Caveat-Bold.ttf"),
-            font_size: 60.0,
-            ..Default::default()
-        },
-        TextSpan::default(),
-    ));
+fn fps_display_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands
+        .spawn((
+            Text("fps: ".to_string()),
+            TextFont {
+                font: asset_server.load("fonts/Caveat-Bold.ttf"),
+                font_size: 60.0,
+                ..Default::default()
+            },
+            TextColor(Color::WHITE),
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(5.0),
+                left: Val::Px(15.0),
+                ..default()
+            },
+            ZIndex(2),
+        ))
+        .with_child((
+            FpsText,
+            TextColor(Color::Srgba(GOLD)),
+            TextFont {
+                font: asset_server.load("fonts/Caveat-Bold.ttf"),
+                font_size: 60.0,
+                ..Default::default()
+            },
+            TextSpan::default(),
+        ));
 }
 
 #[derive(Component)]
@@ -548,63 +538,122 @@ fn fps_update_system(
     }
 }
 
+fn burn_device_ready(burn_device: Option<Res<BurnDevice>>) -> bool {
+    burn_device
+        .map(|device| device.is_ready())
+        .unwrap_or(false)
+}
+
+fn models_not_loaded(dino: Option<Res<DinoModel<Wgpu>>>) -> bool {
+    dino.is_none()
+}
+
+fn start_model_loading(
+    mut commands: Commands,
+    args: Res<BevyBurnDinoConfig>,
+    burn_device: Res<BurnDevice>,
+    existing_task: Option<Res<ModelLoadTask>>,
+    existing_model: Option<Res<DinoModel<Wgpu>>>,
+) {
+    if existing_task.is_some() {
+        return;
+    }
+    if existing_model.is_some() {
+        return;
+    }
+
+    let Some(device) = burn_device.device() else {
+        return;
+    };
+    let device = device.clone();
+
+    log("spawning async model loading task");
+
+    let config = DinoVisionTransformerConfig {
+        register_token_count: 0,
+        use_register_tokens: false,
+        normalize_intermediate_tokens: false,
+        ..DinoVisionTransformerConfig::vits(Some(MODEL_IMAGE_SIZE), None)
+    };
+    let pca_config = PcaTransformConfig::new(config.embedding_dimension, 3);
+    let pca_type = args.pca_type.clone();
+
+    let task = IoTaskPool::get().spawn(async move {
+        let dino = io::load_model::<Wgpu>(&config, &device).await;
+        let pca_transform = io::load_pca_model::<Wgpu>(&pca_config, pca_type, &device).await;
+
+        LoadedModels {
+            config,
+            device,
+            dino: Arc::new(Mutex::new(dino)),
+            pca: Arc::new(Mutex::new(pca_transform)),
+        }
+    });
+
+    commands.insert_resource(ModelLoadTask(task));
+}
+
+fn finish_model_loading(mut commands: Commands, task: Option<ResMut<ModelLoadTask>>) {
+    let Some(mut task) = task else {
+        return;
+    };
+
+    if let Some(models) = block_on(future::poll_once(&mut task.0)) {
+        log("model loading completed");
+        let LoadedModels {
+            config,
+            device,
+            dino,
+            pca,
+        } = models;
+        commands.insert_resource(DinoModel {
+            config,
+            device: device.clone(),
+            model: dino,
+        });
+        commands.insert_resource(PcaTransformModel { model: pca });
+        commands.remove_resource::<ModelLoadTask>();
+    }
+}
+
 async fn run_app() {
     log("running app...");
 
     let args = parse_args::<BevyBurnDinoConfig>();
     log(&format!("{:?}", args));
-
-    let device = Default::default();
-    init_async::<AutoGraphicsApi>(&device, Default::default()).await;
-
-    log("device created");
-
-    let config = DinoVisionTransformerConfig {
-        ..DinoVisionTransformerConfig::vits(None, None)  // TODO: supply image size fron config
-    };
-    let dino = io::load_model::<Wgpu>(&config, &device).await;
-
-    log("dino model loaded");
-
-    // TODO: support adaptive PCA
-    let pca_config = PcaTransformConfig::new(
-        config.embedding_dimension,
-        3,
-    );
-    let pca_transform = io::load_pca_model::<Wgpu>(
-        &pca_config,
-        args.pca_type.clone(),
-        &device,
-    ).await;
-
-    log("pca model loaded");
+    log(&format!(
+        "using fixed inference resolution of {MODEL_IMAGE_SIZE}x{MODEL_IMAGE_SIZE}"
+    ));
 
     let mut app = viewer_app(args);
 
     app.init_resource::<PcaFeatures>();
-    app.insert_resource(DinoModel {
-        config,
-        device,
-        model: Arc::new(Mutex::new(dino)),
-    });
-    app.insert_resource(PcaTransformModel {
-        model: Arc::new(Mutex::new(pca_transform)),
-    });
-
-    app.add_systems(Startup, setup_ui);
     app.add_systems(
         Update,
-        (
-            handle_tasks,
-            process_frames,
-        ),
+        start_model_loading
+            .run_if(burn_device_ready)
+            .run_if(models_not_loaded),
+    );
+    app.add_systems(Update, finish_model_loading);
+    app.add_systems(
+        Update,
+        setup_ui
+            .run_if(resource_exists::<DinoModel<Wgpu>>)
+            .run_if(resource_exists::<PcaTransformModel<Wgpu>>)
+            .run_if(burn_device_ready),
+    );
+    app.add_systems(Update, handle_tasks);
+    app.add_systems(
+        Update,
+        process_frames
+            .run_if(resource_exists::<DinoModel<Wgpu>>)
+            .run_if(resource_exists::<PcaTransformModel<Wgpu>>),
     );
 
     log("running bevy app...");
 
     app.run();
 }
-
 
 pub fn log(_msg: &str) {
     #[cfg(debug_assertions)]
@@ -618,7 +667,6 @@ pub fn log(_msg: &str) {
         println!("{}", _msg);
     }
 }
-
 
 fn main() {
     #[cfg(feature = "native")]

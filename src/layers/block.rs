@@ -1,26 +1,13 @@
 use burn::prelude::*;
 
 use crate::layers::{
-    attention::{
-        Attention,
-        AttentionConfig,
-    },
-    layer_norm::{
-        LayerNorm,
-        LayerNormConfig,
-    },
-    layer_scale::{
-        LayerScale,
-        LayerScaleConfig,
-    },
-    mlp::{
-        Mlp,
-        MlpConfig,
-    }
+    attention::{Attention, AttentionConfig},
+    layer_norm::{LayerNorm, LayerNormConfig},
+    layer_scale::{LayerScale, LayerScaleConfig},
+    mlp::{Mlp, MlpConfig},
 };
 
-
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct BlockConfig {
     pub attn: AttentionConfig,
     pub layer_scale: Option<LayerScaleConfig>,
@@ -43,14 +30,12 @@ impl BlockConfig {
     }
 }
 
-
 #[derive(Module, Debug)]
 pub struct Block<B: Backend> {
     norm1: LayerNorm<B>,
     attn: Attention<B>,
     ls1: Option<LayerScale<B, 3>>,
     // TODO: drop_path_1
-
     norm2: LayerNorm<B>,
     mlp: Mlp<B, 3>,
     ls2: Option<LayerScale<B, 3>>,
@@ -58,10 +43,7 @@ pub struct Block<B: Backend> {
 }
 
 impl<B: Backend> Block<B> {
-    pub fn new(
-        device: &B::Device,
-        config: BlockConfig,
-    ) -> Self {
+    pub fn new(device: &B::Device, config: BlockConfig) -> Self {
         let norm1 = LayerNormConfig::new(config.attn.dim).init(device);
         let attn = config.attn.init(device);
 
@@ -98,11 +80,7 @@ impl<B: Backend> Block<B> {
         }
     }
 
-    pub fn forward(
-        &self,
-        x: Tensor<B, 3>,
-    ) -> Tensor<B, 3>
-    {
+    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
         // TODO: implement train mode drop_path and `drop_add_residual_stochastic_depth` for sample_drop_ratio > 0.1
 
         let norm = self.norm1.forward(x.clone());
