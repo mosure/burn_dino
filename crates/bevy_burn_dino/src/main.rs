@@ -277,13 +277,8 @@ fn process_frames(
         let task = thread_pool.spawn({
             let device_clone = device.clone();
             async move {
-                let tensor = process_frame(
-                        image,
-                        dino_config,
-                        dino_model,
-                        pca_model,
-                        device_clone
-                    ).await;
+                let tensor =
+                    process_frame(image, dino_config, dino_model, pca_model, device_clone).await;
 
                 let mut command_queue = CommandQueue::default();
                 command_queue.push(move |world: &mut World| {
@@ -539,9 +534,7 @@ fn fps_update_system(
 }
 
 fn burn_device_ready(burn_device: Option<Res<BurnDevice>>) -> bool {
-    burn_device
-        .map(|device| device.is_ready())
-        .unwrap_or(false)
+    burn_device.map(|device| device.is_ready()).unwrap_or(false)
 }
 
 fn models_not_loaded(dino: Option<Res<DinoModel<Wgpu>>>) -> bool {

@@ -80,11 +80,16 @@ impl<B: Backend> Block<B> {
         }
     }
 
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(
+        &self,
+        x: Tensor<B, 3>,
+        pos: Option<&Tensor<B, 3>>,
+        attn_mask: Option<&Tensor<B, 4>>,
+    ) -> Tensor<B, 3> {
         // TODO: implement train mode drop_path and `drop_add_residual_stochastic_depth` for sample_drop_ratio > 0.1
 
         let norm = self.norm1.forward(x.clone());
-        let residual = self.attn.forward(norm.clone());
+        let residual = self.attn.forward(norm.clone(), pos, attn_mask);
         let residual = if let Some(ls1) = &self.ls1 {
             ls1.forward(residual)
         } else {

@@ -3,6 +3,11 @@ use burn::{
     tensor::activation::{quiet_softmax, softmax},
 };
 
+use crate::layers::{
+    layer_norm::{LayerNorm, LayerNormConfig},
+    rope::{RopeConfig, RotaryEmbedding},
+};
+
 #[derive(Config, Debug)]
 pub struct AttentionConfig {
     pub dim: usize,
@@ -12,6 +17,10 @@ pub struct AttentionConfig {
     pub attn_drop: f64,
     pub proj_drop: f64,
     pub quiet_softmax: bool,
+    #[config(default = "false")]
+    pub qk_norm: bool,
+    #[config(default = "None")]
+    pub rope: Option<RopeConfig>,
 }
 
 impl Default for AttentionConfig {
@@ -24,6 +33,8 @@ impl Default for AttentionConfig {
             attn_drop: 0.0,
             proj_drop: 0.0,
             quiet_softmax: false,
+            qk_norm: false,
+            rope: None,
         }
     }
 }
@@ -43,6 +54,9 @@ pub struct Attention<B: Backend> {
     pub num_heads: usize,
     pub scale: f32,
     pub quiet_softmax: bool,
+    q_norm: Option<LayerNorm<B>>,
+    k_norm: Option<LayerNorm<B>>,
+    rope: Option<RopeConfig>,
 }
 
 impl<B: Backend> Attention<B> {
@@ -62,6 +76,18 @@ impl<B: Backend> Attention<B> {
 
         let proj_drop = nn::DropoutConfig::new(config.proj_drop).init();
 
+        let rope = config.rope;
+        let q_norm = if config.qk_norm {
+            Some(LayerNormConfig::new(head_dim).init(device))
+        } else {
+            None
+        };
+        let k_norm = if config.qk_norm {
+            Some(LayerNormConfig::new(head_dim).init(device))
+        } else {
+            None
+        };
+
         Self {
             qkv,
             attn_drop,
@@ -70,11 +96,19 @@ impl<B: Backend> Attention<B> {
             num_heads: config.num_heads,
             scale,
             quiet_softmax: config.quiet_softmax,
+            q_norm,
+            k_norm,
+            rope,
         }
     }
 
     #[allow(non_snake_case, clippy::single_range_in_vec_init)]
-    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+    pub fn forward(
+        &self,
+        x: Tensor<B, 3>,
+        pos: Option<&Tensor<B, 3>>,
+        attn_mask: Option<&Tensor<B, 4>>,
+    ) -> Tensor<B, 3> {
         let [B, N, C] = x.shape().dims();
 
         let qkv = self
@@ -83,17 +117,35 @@ impl<B: Backend> Attention<B> {
             .reshape([B, N, 3, self.num_heads, C / self.num_heads])
             .permute([2, 0, 3, 1, 4]);
 
-        let q: Tensor<B, 4> = qkv.clone().slice([0..1]).squeeze_dim(0) * self.scale;
-        let k = qkv.clone().slice([1..2]).squeeze_dim(0);
+        let mut q: Tensor<B, 4> = qkv.clone().slice([0..1]).squeeze_dim(0);
+        let mut k = qkv.clone().slice([1..2]).squeeze_dim(0);
         let v = qkv.slice([2..3]).squeeze_dim(0);
+
+        if let Some(norm) = &self.q_norm {
+            q = norm.forward(q);
+        }
+        if let Some(norm) = &self.k_norm {
+            k = norm.forward(k);
+        }
+
+        if let (Some(rope), Some(pos)) = (&self.rope, pos) {
+            q = RotaryEmbedding::apply(q, pos, *rope);
+            k = RotaryEmbedding::apply(k, pos, *rope);
+        }
+
+        q = q * self.scale;
 
         let attn = q.matmul(k.swap_dims(2, 3));
 
-        let attn = if self.quiet_softmax {
+        let mut attn = if self.quiet_softmax {
             quiet_softmax(attn, 3)
         } else {
             softmax(attn, 3)
         };
+
+        if let Some(mask) = attn_mask {
+            attn = attn * mask.clone();
+        }
 
         let attn = self.attn_drop.forward(attn);
 

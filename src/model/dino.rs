@@ -10,6 +10,7 @@ use crate::layers::{
     layer_norm::{LayerNorm, LayerNormConfig},
     layer_scale::LayerScaleConfig,
     patch_embed::{PatchEmbed, PatchEmbedConfig},
+    rope::RopeConfig,
 };
 
 #[derive(Config, Debug)]
@@ -33,6 +34,20 @@ pub struct DinoVisionTransformerConfig {
 
     #[config(default = "Initializer::Normal{mean:0.02, std:1.0}")]
     pub initializer: Initializer,
+    #[config(default = "None")]
+    pub alt_block_start: Option<usize>,
+    #[config(default = "None")]
+    pub rope_block_start: Option<usize>,
+    #[config(default = "100.0")]
+    pub rope_frequency: f32,
+    #[config(default = "None")]
+    pub qk_norm_block_start: Option<usize>,
+    #[config(default = "false")]
+    pub cat_token: bool,
+    #[config(default = "false")]
+    pub use_camera_tokens: bool,
+    #[config(default = "true")]
+    pub use_mask_token: bool,
 }
 
 impl DinoVisionTransformerConfig {
@@ -169,13 +184,24 @@ pub struct DinoOutput<B: Backend> {
     pub masks: Option<Tensor<B, 3, Bool>>,
 }
 
+pub struct DinoIntermediate<B: Backend> {
+    pub patches: Tensor<B, 3>,
+    pub camera: Option<Tensor<B, 2>>,
+}
+
+struct BlockSnapshot<B: Backend> {
+    tensor: Tensor<B, 3>,
+    camera: Option<Tensor<B, 2>>,
+}
+
 #[derive(Module, Debug)]
 pub struct DinoVisionTransformer<B: Backend> {
     activation: Gelu,
     cls_token: Param<Tensor<B, 3>>,
     pub pos_embed: Param<Tensor<B, 3>>,
-    mask_token: Param<Tensor<B, 2>>,
+    mask_token: Option<Param<Tensor<B, 2>>>,
     register_tokens: Option<Param<Tensor<B, 3>>>,
+    camera_token: Option<Param<Tensor<B, 3>>>,
     interpolate: nn::interpolate::Interpolate2d,
     patch_embed: PatchEmbed<B>,
     norm: LayerNorm<B>,
@@ -183,6 +209,13 @@ pub struct DinoVisionTransformer<B: Backend> {
     patch_size: usize,
     register_token_count: usize,
     normalize_intermediate_tokens: bool,
+    embedding_dim: usize,
+    patch_token_start: usize,
+    alt_block_start: Option<usize>,
+    rope_block_start: Option<usize>,
+    rope_frequency: f32,
+    cat_tokens: bool,
+    use_camera_tokens: bool,
 }
 
 impl<B: Backend> DinoVisionTransformer<B> {
@@ -216,9 +249,15 @@ impl<B: Backend> DinoVisionTransformer<B> {
             device,
         );
 
-        let mask_token = config
-            .initializer
-            .init([1, config.embedding_dimension], device);
+        let mask_token = if config.use_mask_token {
+            Some(
+                config
+                    .initializer
+                    .init([1, config.embedding_dimension], device),
+            )
+        } else {
+            None
+        };
 
         let register_tokens = if config.use_register_tokens && config.register_token_count > 0 {
             Some(
@@ -230,6 +269,18 @@ impl<B: Backend> DinoVisionTransformer<B> {
                     [1, config.register_token_count, config.embedding_dimension],
                     device,
                 ),
+            )
+        } else {
+            None
+        };
+
+        let camera_token = if config.use_camera_tokens {
+            Some(
+                Initializer::Normal {
+                    mean: 0.0,
+                    std: 1e-6,
+                }
+                .init([1, 2, config.embedding_dimension], device),
             )
         } else {
             None
@@ -248,8 +299,20 @@ impl<B: Backend> DinoVisionTransformer<B> {
         let norm: LayerNorm<B> = LayerNormConfig::new(config.embedding_dimension).init(device);
 
         let mut blocks = Vec::with_capacity(config.depth);
-        for _ in 0..config.depth {
-            let block = config.block_config.init(device);
+        for index in 0..config.depth {
+            let mut block_config = config.block_config.clone();
+            if let Some(start) = config.qk_norm_block_start
+                && index >= start
+            {
+                block_config.attn.qk_norm = true;
+            }
+            if let Some(start) = config.rope_block_start
+                && index >= start {
+                block_config.attn.rope = Some(RopeConfig {
+                    base_frequency: config.rope_frequency,
+                });
+            }
+            let block = block_config.init(device);
             blocks.push(block);
         }
 
@@ -259,12 +322,15 @@ impl<B: Backend> DinoVisionTransformer<B> {
             0
         };
 
+        let patch_token_start = 1 + register_token_count;
+
         Self {
             activation: Gelu::new(),
             cls_token,
             pos_embed,
             mask_token,
             register_tokens,
+            camera_token,
             interpolate,
             patch_embed,
             norm,
@@ -272,6 +338,13 @@ impl<B: Backend> DinoVisionTransformer<B> {
             patch_size: config.patch_size,
             register_token_count,
             normalize_intermediate_tokens: config.normalize_intermediate_tokens,
+            embedding_dim: config.embedding_dimension,
+            patch_token_start,
+            alt_block_start: config.alt_block_start,
+            rope_block_start: config.rope_block_start,
+            rope_frequency: config.rope_frequency,
+            cat_tokens: config.cat_token,
+            use_camera_tokens: config.use_camera_tokens,
         }
     }
 
@@ -285,14 +358,13 @@ impl<B: Backend> DinoVisionTransformer<B> {
         let b_dim = tokens.shape().dims[0];
         let n_dim = tokens.shape().dims[1];
         let reg_count = self.register_token_count;
-
         let x_norm_clstoken = x_norm.clone().slice([0..b_dim, 0..1]).squeeze_dim(1);
         let x_norm_regtokens = if reg_count > 0 {
             Some(x_norm.clone().slice([0..b_dim, 1..(1 + reg_count)]))
         } else {
             None
         };
-        let patch_start = 1 + reg_count;
+        let patch_start = self.patch_token_start;
         let x_norm_patchtokens = x_norm.clone().slice([0..b_dim, patch_start..n_dim]);
 
         DinoOutput {
@@ -360,7 +432,11 @@ impl<B: Backend> DinoVisionTransformer<B> {
 
         let x = self.patch_embed.forward(x);
         let x = if let Some(mask) = mask {
-            x.mask_where(mask, self.mask_token.val().unsqueeze_dim(0))
+            if let Some(mask_token) = &self.mask_token {
+                x.mask_where(mask, mask_token.val().unsqueeze_dim(0))
+            } else {
+                x
+            }
         } else {
             x
         };
@@ -398,32 +474,276 @@ impl<B: Backend> DinoVisionTransformer<B> {
         x: Tensor<B, 4>,
         layers: &[usize],
     ) -> (DinoOutput<B>, Vec<Tensor<B, 3>>) {
+        let (output, hooks, _) = self.forward_with_intermediate_tokens_ext(x, layers, &[], None);
+        let tensors = hooks.into_iter().map(|hook| hook.patches).collect();
+        (output, tensors)
+    }
+
+    pub fn forward_with_intermediate_tokens_ext(
+        &self,
+        x: Tensor<B, 4>,
+        layers: &[usize],
+        export_layers: &[usize],
+        camera_token: Option<Tensor<B, 2>>,
+    ) -> (DinoOutput<B>, Vec<DinoIntermediate<B>>, Vec<Tensor<B, 3>>) {
+        let dims = x.shape().dims::<4>();
+        let batch = dims[0];
+        let height = dims[2];
+        let width = dims[3];
+
         let mut tokens = self.prepare_tokens_with_masks(x, None);
-        let mut outputs = Vec::with_capacity(layers.len());
+        let device = tokens.device();
+
+        let rope_positions = self.prepare_rope_positions(batch, width, height, &device);
+
+        let mut snapshots = Vec::with_capacity(layers.len());
+        let mut aux_snapshots = Vec::with_capacity(export_layers.len());
+        let mut local_snapshot = tokens.clone();
 
         for (index, block) in self.blocks.iter().enumerate() {
-            tokens = block.forward(tokens);
+            if self
+                .alt_block_start
+                .map(|start| index == start)
+                .unwrap_or(false)
+            {
+                tokens = self.apply_camera_token(tokens, camera_token.clone());
+            }
+            let rope_active = self
+                .rope_block_start
+                .map(|start| index >= start)
+                .unwrap_or(false);
+            let local_pos = if rope_active {
+                rope_positions.as_ref().map(|(local, _)| local)
+            } else {
+                None
+            };
+            let global_pos = if rope_active {
+                rope_positions.as_ref().map(|(_, global)| global)
+            } else {
+                None
+            };
+
+            let use_alt = self
+                .alt_block_start
+                .map(|start| index >= start)
+                .unwrap_or(false);
+
+            if use_alt && index % 2 == 1 {
+                tokens = block.forward(tokens, global_pos, None);
+            } else {
+                tokens = block.forward(tokens, local_pos, None);
+                local_snapshot = tokens.clone();
+            }
+
+            if export_layers.contains(&index) {
+                aux_snapshots.push(tokens.clone());
+            }
 
             if layers.contains(&index) {
-                if self.normalize_intermediate_tokens {
-                    outputs.push(self.norm.forward(tokens.clone()));
-                } else {
-                    outputs.push(tokens.clone());
-                }
+                snapshots.push(self.capture_snapshot(tokens.clone(), local_snapshot.clone()));
             }
         }
 
+        let intermediates = snapshots
+            .into_iter()
+            .map(|snapshot| self.finalize_snapshot(snapshot))
+            .collect();
+
+        let aux = aux_snapshots
+            .into_iter()
+            .map(|tensor| self.normalize_aux_snapshot(tensor))
+            .collect();
+
         let output = self.finalize_output(tokens, None);
-        (output, outputs)
+        (output, intermediates, aux)
     }
 
     pub fn forward(&self, x: Tensor<B, 4>, masks: Option<Tensor<B, 3, Bool>>) -> DinoOutput<B> {
         let mut tokens = self.prepare_tokens_with_masks(x, None);
 
         for block in &self.blocks {
-            tokens = block.forward(tokens);
+            tokens = block.forward(tokens, None, None);
         }
 
         self.finalize_output(tokens, masks)
+    }
+
+    fn apply_camera_token(
+        &self,
+        tokens: Tensor<B, 3>,
+        provided: Option<Tensor<B, 2>>,
+    ) -> Tensor<B, 3> {
+        if self.alt_block_start.is_none() {
+            return tokens;
+        }
+
+        let batch = tokens.shape().dims[0];
+        let embed_dim = tokens.shape().dims[2];
+        let replacement = if let Some(token) = provided {
+            token
+        } else if let Some(param) = &self.camera_token {
+            param
+                .val()
+                .clone()
+                .slice([0..1, 0..1, 0..embed_dim as i32])
+                .reshape([1, embed_dim as i32])
+                .repeat_dim(0, batch)
+        } else {
+            return tokens;
+        };
+
+        let head = replacement.reshape([batch as i32, 1, embed_dim as i32]);
+        let tail = tokens.clone().slice([
+            0..batch as i32,
+            1..tokens.shape().dims[1] as i32,
+            0..embed_dim as i32,
+        ]);
+        Tensor::cat(vec![head, tail], 1)
+    }
+
+    fn prepare_rope_positions(
+        &self,
+        batch: usize,
+        width: usize,
+        height: usize,
+        device: &B::Device,
+    ) -> Option<(Tensor<B, 3>, Tensor<B, 3>)> {
+        self.rope_block_start?;
+
+        let patches_w = width / self.patch_size;
+        let patches_h = height / self.patch_size;
+        let patch_tokens = patches_w * patches_h;
+        let total_tokens = self.patch_token_start + patch_tokens;
+
+        let mut local = Vec::with_capacity(total_tokens * 2);
+        for _ in 0..self.patch_token_start {
+            local.extend_from_slice(&[0.0, 0.0]);
+        }
+        for y in 0..patches_h {
+            for x in 0..patches_w {
+                local.push((y + 1) as f32);
+                local.push((x + 1) as f32);
+            }
+        }
+
+        let mut global = Vec::with_capacity(total_tokens * 2);
+        for _ in 0..self.patch_token_start {
+            global.extend_from_slice(&[0.0, 0.0]);
+        }
+        for _ in 0..patch_tokens {
+            global.extend_from_slice(&[1.0, 1.0]);
+        }
+
+        let mut local_buf = Vec::with_capacity(batch * total_tokens * 2);
+        let mut global_buf = Vec::with_capacity(batch * total_tokens * 2);
+        for _ in 0..batch {
+            local_buf.extend_from_slice(&local);
+            global_buf.extend_from_slice(&global);
+        }
+
+        let local_tensor = Tensor::<B, 1>::from_floats(local_buf.as_slice(), device).reshape([
+            batch as i32,
+            total_tokens as i32,
+            2,
+        ]);
+        let global_tensor = Tensor::<B, 1>::from_floats(global_buf.as_slice(), device).reshape([
+            batch as i32,
+            total_tokens as i32,
+            2,
+        ]);
+        Some((local_tensor, global_tensor))
+    }
+
+    fn capture_snapshot(&self, tokens: Tensor<B, 3>, local: Tensor<B, 3>) -> BlockSnapshot<B> {
+        let combined = if self.cat_tokens {
+            Tensor::cat(vec![local, tokens.clone()], 2)
+        } else {
+            tokens.clone()
+        };
+        let camera = if self.use_camera_tokens {
+            Some(
+                combined
+                    .clone()
+                    .slice([
+                        0..combined.shape().dims[0] as i32,
+                        0..1,
+                        0..combined.shape().dims[2] as i32,
+                    ])
+                    .squeeze_dim(1),
+            )
+        } else {
+            None
+        };
+        BlockSnapshot {
+            tensor: combined,
+            camera,
+        }
+    }
+
+    fn finalize_snapshot(&self, snapshot: BlockSnapshot<B>) -> DinoIntermediate<B> {
+        let normalized = if self.cat_tokens {
+            self.normalize_cat_tokens(snapshot.tensor)
+        } else if self.normalize_intermediate_tokens {
+            self.norm.forward(snapshot.tensor)
+        } else {
+            snapshot.tensor
+        };
+        let dims = normalized.shape().dims::<3>();
+        let patches = normalized.slice([
+            0..dims[0] as i32,
+            self.patch_token_start as i32..dims[1] as i32,
+            0..dims[2] as i32,
+        ]);
+        DinoIntermediate {
+            patches,
+            camera: snapshot.camera,
+        }
+    }
+
+    fn normalize_cat_tokens(&self, tensor: Tensor<B, 3>) -> Tensor<B, 3> {
+        let dims = tensor.shape().dims::<3>();
+        let total = dims[2];
+        if total == self.embedding_dim {
+            if self.normalize_intermediate_tokens {
+                self.norm.forward(tensor)
+            } else {
+                tensor
+            }
+        } else if total == self.embedding_dim * 2 {
+            let local = tensor.clone().slice([
+                0..dims[0] as i32,
+                0..dims[1] as i32,
+                0..self.embedding_dim as i32,
+            ]);
+            let global = tensor.slice([
+                0..dims[0] as i32,
+                0..dims[1] as i32,
+                self.embedding_dim as i32..total as i32,
+            ]);
+            let norm_global = if self.normalize_intermediate_tokens {
+                self.norm.forward(global)
+            } else {
+                global
+            };
+            Tensor::cat(vec![local, norm_global], 2)
+        } else if self.normalize_intermediate_tokens {
+            self.norm.forward(tensor)
+        } else {
+            tensor
+        }
+    }
+
+    fn normalize_aux_snapshot(&self, tensor: Tensor<B, 3>) -> Tensor<B, 3> {
+        let tensor = if self.normalize_intermediate_tokens {
+            self.norm.forward(tensor)
+        } else {
+            tensor
+        };
+        let dims = tensor.shape().dims::<3>();
+        tensor.slice([
+            0..dims[0] as i32,
+            self.patch_token_start as i32..dims[1] as i32,
+            0..dims[2] as i32,
+        ])
     }
 }
