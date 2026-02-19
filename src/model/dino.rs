@@ -1,5 +1,7 @@
+use burn::tensor::module::interpolate;
+use burn::tensor::ops::{InterpolateMode as OpsInterpolateMode, InterpolateOptions};
 use burn::{
-    module::Param,
+    module::{Ignored, Param},
     nn::{Gelu, Initializer},
     prelude::*,
 };
@@ -202,7 +204,7 @@ pub struct DinoVisionTransformer<B: Backend> {
     mask_token: Option<Param<Tensor<B, 2>>>,
     register_tokens: Option<Param<Tensor<B, 3>>>,
     camera_token: Option<Param<Tensor<B, 3>>>,
-    interpolate: nn::interpolate::Interpolate2d,
+    positional_encoding_mode: Ignored<OpsInterpolateMode>,
     patch_embed: PatchEmbed<B>,
     norm: LayerNorm<B>,
     blocks: Vec<Block<B>>,
@@ -286,7 +288,8 @@ impl<B: Backend> DinoVisionTransformer<B> {
             None
         };
 
-        let interpolate = config.positional_encoding_interpolate.init();
+        let positional_encoding_mode: Ignored<OpsInterpolateMode> =
+            Ignored(config.positional_encoding_interpolate.mode.clone().into());
 
         let patch_embed = PatchEmbedConfig::new(
             config.image_size,
@@ -307,7 +310,8 @@ impl<B: Backend> DinoVisionTransformer<B> {
                 block_config.attn.qk_norm = true;
             }
             if let Some(start) = config.rope_block_start
-                && index >= start {
+                && index >= start
+            {
                 block_config.attn.rope = Some(RopeConfig {
                     base_frequency: config.rope_frequency,
                 });
@@ -331,7 +335,7 @@ impl<B: Backend> DinoVisionTransformer<B> {
             mask_token,
             register_tokens,
             camera_token,
-            interpolate,
+            positional_encoding_mode,
             patch_embed,
             norm,
             blocks,
@@ -405,20 +409,48 @@ impl<B: Backend> DinoVisionTransformer<B> {
 
         let dim = x.shape().dims[2];
         let M = N.isqrt();
+        let target_h = W / self.patch_size;
+        let target_w = H / self.patch_size;
 
         assert!(N == M * M, "number of patches should be a square number",);
 
-        let patch_pos_embed = self
-            .interpolate
-            .forward(
-                patch_pos_embed
-                    .reshape([1, M, M, dim])
-                    .permute([0, 3, 1, 2]),
-            )
-            .permute([0, 2, 3, 1])
-            .reshape([1_i32, -1, dim as i32]);
+        let patch_pos_embed = self.interpolate_pos_embedding(
+            patch_pos_embed,
+            M,
+            dim,
+            target_h.max(1),
+            target_w.max(1),
+        );
 
         Tensor::cat(vec![class_pos_embed.unsqueeze_dim(0), patch_pos_embed], 1)
+    }
+
+    fn interpolate_pos_embedding(
+        &self,
+        patch_pos_embed: Tensor<B, 3>,
+        input_grid: usize,
+        channels: usize,
+        output_h: usize,
+        output_w: usize,
+    ) -> Tensor<B, 3> {
+        if input_grid == output_h && input_grid == output_w {
+            return patch_pos_embed;
+        }
+
+        let hw_tokens = patch_pos_embed.swap_dims(1, 2).reshape([
+            1_i32,
+            channels as i32,
+            input_grid as i32,
+            input_grid as i32,
+        ]);
+        let resized = interpolate(
+            hw_tokens,
+            [output_h, output_w],
+            InterpolateOptions::new(self.positional_encoding_mode.0.clone()),
+        );
+        resized
+            .reshape([1_i32, channels as i32, (output_h * output_w) as i32])
+            .swap_dims(1, 2)
     }
 
     #[allow(non_snake_case)]
