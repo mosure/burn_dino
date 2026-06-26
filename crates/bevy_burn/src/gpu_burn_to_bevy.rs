@@ -1,0 +1,350 @@
+// src/gpu_burn_to_bevy.rs
+
+use std::{borrow::Cow, marker::PhantomData, num::NonZeroU64};
+
+use bevy::{
+    asset::{load_internal_asset, uuid_handle},
+    ecs::world::FromWorld,
+    prelude::*,
+    render::{
+        render_asset::RenderAssets,
+        render_resource::*,
+        renderer::{RenderContext, RenderDevice, RenderGraph, RenderGraphSystems, RenderQueue},
+        texture::GpuImage,
+        Render, RenderApp, RenderSystems,
+    },
+};
+use burn::tensor::{backend::Backend as BurnBackend, Tensor, TensorPrimitive};
+use burn_cubecl::kernel::into_contiguous;
+use burn_wgpu::{
+    CubeBackend, FloatElement, IntElement, Wgpu as BurnWgpu, WgpuDevice as BurnWgpuDevice,
+    WgpuRuntime,
+};
+
+// from your bridge
+use crate::{BindingDirection, BurnDevice, ExtractedGpuHandle};
+
+// log target for easy filtering: RUST_LOG=bevy_burn::gpu_burn_to_bevy=info
+const LOG: &str = "bevy_burn::gpu_burn_to_bevy";
+
+#[derive(Component)]
+pub struct CopyBindGroup {
+    pub bg: wgpu::BindGroup,
+    pub workgroups: [u32; 3],
+    pub scratch: Option<Buffer>,
+}
+
+pub trait BurnBevyPrepare<B: BurnBackend> {
+    fn prepare_bind_group(
+        tensor: &Tensor<B, 3>,
+        burn_device: &BurnWgpuDevice,
+        render_device: &RenderDevice,
+        render_queue: &RenderQueue,
+        layout: &BindGroupLayout,
+        texture: &wgpu::Texture,
+        extent: Extent3d,
+    ) -> Option<CopyBindGroup>;
+}
+
+impl<F, I> BurnBevyPrepare<BurnWgpu<F, I>> for ()
+where
+    F: FloatElement,
+    I: IntElement,
+{
+    fn prepare_bind_group(
+        tensor: &Tensor<BurnWgpu<F, I>, 3>,
+        burn_device: &BurnWgpuDevice,
+        render_device: &RenderDevice,
+        render_queue: &RenderQueue,
+        layout: &BindGroupLayout,
+        texture: &wgpu::Texture,
+        extent: Extent3d,
+    ) -> Option<CopyBindGroup> {
+        let [h, w, c] = tensor.dims();
+        if c != 4 {
+            warn!(target: LOG, "expected f32 c==4 (rgba32f), got c={c}");
+            return None;
+        }
+
+        // Avoid round-tripping through the CPU when the tensor already lives on the render GPU.
+        let target_device = burn_device.clone();
+        let tensor = if tensor.device() == target_device {
+            tensor.clone()
+        } else {
+            tensor.clone().to_device(&target_device)
+        };
+
+        let prim_fusion = tensor.into_primitive().tensor();
+        let fusion_client = prim_fusion.client.clone();
+        let base =
+            fusion_client.resolve_tensor_float::<CubeBackend<WgpuRuntime, F, I, u32>>(prim_fusion);
+        let base_img: Tensor<CubeBackend<WgpuRuntime, F, I, u32>, 3> =
+            Tensor::from_primitive(TensorPrimitive::Float(base));
+        let prim2 = base_img.into_primitive().tensor();
+        // Shader indexes rows as y * width + x; keep rows tightly packed.
+        let prim2 = into_contiguous(prim2);
+        let client = &prim2.client;
+        let res = client
+            .get_resource(prim2.handle.clone())
+            .expect("get tensor GPU resource");
+        let _ = client.flush();
+
+        let resource = res.resource();
+        let mut scratch: Option<Buffer> = None;
+        let (src_buffer, src_off): (&wgpu::Buffer, wgpu::BufferAddress) =
+            if resource.offset & 0xFFu64 != 0 {
+                let aligned: Buffer = render_device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("bevy_burn.aligned_tensor"),
+                    size: resource.size,
+                    usage: BufferUsages::COPY_DST | BufferUsages::STORAGE,
+                    mapped_at_creation: false,
+                });
+
+                let mut encoder =
+                    render_device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("bevy_burn.align_buffer"),
+                    });
+                encoder.copy_buffer_to_buffer(
+                    &resource.buffer,
+                    resource.offset,
+                    &aligned,
+                    0,
+                    resource.size,
+                );
+                render_queue
+                    .0
+                    .as_ref()
+                    .submit(std::iter::once(encoder.finish()));
+
+                scratch = Some(aligned);
+                let buffer_ref = scratch.as_ref().unwrap();
+                (&**buffer_ref, 0)
+            } else {
+                (&resource.buffer, resource.offset as wgpu::BufferAddress)
+            };
+
+        let src_binding = wgpu::BufferBinding {
+            buffer: src_buffer,
+            offset: src_off,
+            size: NonZeroU64::new(resource.size),
+        };
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bg = render_device
+            .wgpu_device()
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("buffer-rgba32f bg"),
+                layout: layout.value(),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(src_binding),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                ],
+            });
+
+        let copy_w = Ord::min(w as u32, extent.width);
+        let copy_h = Ord::min(h as u32, extent.height);
+        let gx = copy_w.div_ceil(16);
+        let gy = copy_h.div_ceil(16);
+
+        Some(CopyBindGroup {
+            bg,
+            workgroups: [gx, gy, 1],
+            scratch,
+        })
+    }
+}
+
+#[derive(Resource)]
+struct Rgba32fPipe {
+    bgl: BindGroupLayout,
+    id: CachedComputePipelineId,
+}
+
+impl FromWorld for Rgba32fPipe {
+    fn from_world(world: &mut World) -> Self {
+        let device = world.resource::<RenderDevice>();
+        let pipeline_cache = world.resource::<PipelineCache>();
+
+        let bgl = device.create_bind_group_layout(
+            "buffer-rgba32f bgl",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::COMPUTE,
+                (
+                    binding_types::storage_buffer_read_only_sized(false, None),
+                    binding_types::texture_storage_2d(
+                        TextureFormat::Rgba32Float,
+                        StorageTextureAccess::WriteOnly,
+                    ),
+                ),
+            ),
+        );
+
+        let id = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: Some("buffer-rgba32f pipe".into()),
+            layout: vec![BindGroupLayoutDescriptor::new(
+                "buffer-rgba32f bgl",
+                &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStages::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba32Float,
+                            view_dimension: TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            )],
+            shader: COPY_SHADER_HANDLE,
+            shader_defs: vec![],
+            entry_point: Cow::from("main").into(),
+            immediate_size: 0,
+            zero_initialize_workgroup_memory: true,
+        });
+
+        Rgba32fPipe { bgl, id }
+    }
+}
+
+fn run_burn_copy_pass(
+    mut render_ctx: RenderContext,
+    cache: Res<PipelineCache>,
+    pipe: Res<Rgba32fPipe>,
+    bg_q: Query<&CopyBindGroup>,
+) {
+    let mut seen = 0usize;
+
+    if let Some(p) = cache.get_compute_pipeline(pipe.id) {
+        for bg in &bg_q {
+            seen += 1;
+
+            let mut pass =
+                render_ctx
+                    .command_encoder()
+                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("buffer-rgba32f write"),
+                        ..Default::default()
+                    });
+            pass.set_pipeline(p);
+            pass.set_bind_group(0, &bg.bg, &[]);
+            pass.dispatch_workgroups(bg.workgroups[0], bg.workgroups[1], bg.workgroups[2]);
+        }
+    } else {
+        debug!(target: LOG, "copy pass: pipeline not ready yet");
+    }
+
+    debug!(target: LOG, "copy pass: finished (seen={})", seen);
+}
+
+pub struct GpuBurnToBevyPlugin<B: BurnBackend> {
+    _phantom: PhantomData<B>,
+}
+
+impl<B: BurnBackend> Default for GpuBurnToBevyPlugin<B> {
+    fn default() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+}
+
+const COPY_SHADER_HANDLE: Handle<Shader> = uuid_handle!("4477f827-8df7-4da1-906e-1f8e5ff64935");
+
+impl<B> Plugin for GpuBurnToBevyPlugin<B>
+where
+    B: BurnBackend + 'static,
+    (): BurnBevyPrepare<B>,
+{
+    fn build(&self, app: &mut App) {
+        load_internal_asset!(
+            app,
+            COPY_SHADER_HANDLE,
+            "buffer_to_rgba32f.wgsl",
+            Shader::from_wgsl
+        );
+
+        let render_app = app.sub_app_mut(RenderApp);
+
+        render_app.init_resource::<Rgba32fPipe>();
+
+        render_app.add_systems(
+            Render,
+            queue_copy_bind_groups::<B>.in_set(RenderSystems::Queue),
+        );
+        render_app.add_systems(
+            RenderGraph,
+            run_burn_copy_pass.in_set(RenderGraphSystems::Render),
+        );
+    }
+}
+
+/// build per-entity bind groups from burn tensors (queue stage)
+#[allow(clippy::type_complexity)]
+fn queue_copy_bind_groups<B: BurnBackend>(
+    mut commands: Commands,
+    burn_device: Res<BurnDevice>,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    pipe: Res<Rgba32fPipe>,
+    images: Res<RenderAssets<GpuImage>>,
+    q_handles: Query<(Entity, &ExtractedGpuHandle<B>)>,
+) where
+    (): BurnBevyPrepare<B>,
+{
+    for (entity, h) in q_handles.iter() {
+        // only handle burn → bevy, and only when requested
+        if h.direction != BindingDirection::BurnToBevy || !h.upload {
+            continue;
+        }
+
+        let Some(gpu_image) = images.get(&h.image) else {
+            debug!(target: LOG, "queue: no GpuImage for handle; skipping");
+            continue;
+        };
+
+        let extent = Extent3d {
+            width: gpu_image.texture_descriptor.size.width,
+            height: gpu_image.texture_descriptor.size.height,
+            depth_or_array_layers: 1,
+        };
+
+        // produce a bind group targeting the current texture
+        let Some(device) = burn_device.device() else {
+            continue;
+        };
+
+        if let Some(bg) = <() as BurnBevyPrepare<B>>::prepare_bind_group(
+            &h.tensor,
+            device,
+            &render_device,
+            &render_queue,
+            &pipe.bgl,
+            &gpu_image.texture,
+            extent,
+        ) {
+            commands.entity(entity).insert(bg);
+            trace!(target: LOG, "queue: bind group prepared for entity {:?}", entity);
+        } else {
+            // optional: remove any stale component if preparation failed this frame
+            // commands.entity(entity).remove::<CopyBindGroup>();
+            debug!(target: LOG, "queue: preparation failed (incompatible tensor/offset)");
+        }
+    }
+}

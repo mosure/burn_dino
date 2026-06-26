@@ -1,6 +1,6 @@
 use std::{env, error::Error, path::PathBuf};
 
-use burn::{backend::ndarray::NdArray, tensor::backend::Backend};
+use burn::{backend::ndarray::NdArray, tensor::Device as BackendDevice};
 use burn_dino::{
     correctness::{self, CorrectnessReference},
     model::dino::DinoVisionTransformerConfig,
@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("assets/correctness/dinov2_vits14_reference.safetensors"));
 
-    let device = <InferenceBackend as Backend>::Device::default();
+    let device = BackendDevice::<InferenceBackend>::default();
     let config = DinoVisionTransformerConfig::vits(None, None);
 
     println!("Loading Burn checkpoint from {}", checkpoint_path.display());

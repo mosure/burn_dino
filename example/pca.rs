@@ -95,10 +95,10 @@ fn write_images<B: Backend>(
     upsample_height: u32,
     upsample_width: u32,
 ) {
-    let batch = images.shape().dims[0];
-    let height = images.shape().dims[1];
-    let width = images.shape().dims[2];
-    let channels = images.shape().dims[3];
+    let batch = images.dims()[0];
+    let height = images.dims()[1];
+    let width = images.dims()[2];
+    let channels = images.dims()[3];
 
     let image_size = height * width * channels;
 
@@ -144,9 +144,9 @@ fn main() {
     let batched_input = Tensor::cat(input_tensors, 0);
     let dino_features = dino.forward(batched_input.clone(), None).x_norm_patchtokens;
 
-    let batch = dino_features.shape().dims[0];
-    let elements = dino_features.shape().dims[1];
-    let embedding_dim = dino_features.shape().dims[2];
+    let batch = dino_features.dims()[0];
+    let elements = dino_features.dims()[1];
+    let embedding_dim = dino_features.dims()[2];
     let n_samples = batch * elements;
     let spatial_size = elements.isqrt();
 

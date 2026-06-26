@@ -92,9 +92,9 @@ fn main() {
     let batched_input = Tensor::cat(input_tensors, 0);
     let output = dino.forward(batched_input.clone(), None).x_norm_patchtokens;
 
-    let batch = output.shape().dims[0];
-    let elements = output.shape().dims[1];
-    let features = output.shape().dims[2];
+    let batch = output.dims()[0];
+    let elements = output.dims()[1];
+    let features = output.dims()[2];
     let n_samples = batch * elements;
 
     let spatial_size = elements.isqrt();
@@ -132,7 +132,7 @@ fn main() {
     for (i, img) in tsne_features.outer_iter().enumerate() {
         let collected: Vec<u8> = img
             .iter()
-            .map(|&x| (x * 255.0).max(0.0).min(255.0) as u8)
+            .map(|&x| (x * 255.0).clamp(0.0, 255.0) as u8)
             .collect();
         let img = RgbImage::from_raw(spatial_size as u32, spatial_size as u32, collected).unwrap();
 

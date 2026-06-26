@@ -90,10 +90,11 @@ pub struct DinoImportConfig {
 }
 
 type Backend = burn::backend::NdArray<f32>;
+type BackendDevice = burn::tensor::Device<Backend>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args::<DinoImportConfig>();
-    let device = <Backend as burn::tensor::backend::Backend>::Device::default();
+    let device = BackendDevice::default();
     let mut config = args.vit_type.config();
     if let Some(register_tokens) = args.register_tokens {
         config = config.with_register_tokens(register_tokens);
@@ -116,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn import_dino_weights(
-    device: &<Backend as burn::tensor::backend::Backend>::Device,
+    device: &BackendDevice,
     args: &DinoImportConfig,
     config: &DinoVisionTransformerConfig,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -176,7 +177,7 @@ fn import_dino_weights(
 }
 
 fn import_pca_weights(
-    device: &<Backend as burn::tensor::backend::Backend>::Device,
+    device: &BackendDevice,
     args: &DinoImportConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !args.pca_weights.exists() {
@@ -212,7 +213,7 @@ fn import_pca_weights(
 }
 
 fn run_validation(
-    device: &<Backend as burn::tensor::backend::Backend>::Device,
+    device: &BackendDevice,
     checkpoint_path: &Path,
     reference_path: &Path,
     config: &DinoVisionTransformerConfig,
@@ -322,8 +323,12 @@ fn report_apply_result(prefix: &str, result: &ApplyResult) {
 
     if !result.missing.is_empty() {
         println!("[IMPORT] Missing {} tensor(s):", result.missing.len());
-        for key in &result.missing {
-            println!("  - {key}");
+        for (path, container_stack) in &result.missing {
+            if container_stack.is_empty() {
+                println!("  - {path}");
+            } else {
+                println!("  - {path} ({container_stack})");
+            }
         }
     }
 

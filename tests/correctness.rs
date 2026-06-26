@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use burn::{backend::ndarray::NdArray, tensor::backend::Backend};
+use burn::{backend::ndarray::NdArray, tensor::Device as BackendDevice};
 use burn_dino::{
     correctness::{self, CorrectnessReference},
     model::dino::DinoVisionTransformerConfig,
@@ -26,7 +26,7 @@ fn dinov2_vits14_matches_torch_reference() {
         reference.display()
     );
 
-    let device = <TestBackend as Backend>::Device::default();
+    let device = BackendDevice::<TestBackend>::default();
     let config = DinoVisionTransformerConfig::vits(None, None);
     let reference_data =
         CorrectnessReference::load(&reference).expect("Failed to load reference tensors");

@@ -18,7 +18,7 @@ burn [dinov2](https://arxiv.org/abs/2304.07193) model, view the [live demo](http
 | ![Alt text](./assets/images/dino_2.png)    | ![Alt text](./docs/images/dino_2_pca.png)    |
 | ![Alt text](./assets/images/dino_3.png)    | ![Alt text](./docs/images/dino_3_pca.png)    |
 
-`cargo run --example pca`
+`cargo run --features backend_wgpu --example pca`
 `cargo run -p bevy_burn_dino`
 
 
@@ -38,7 +38,7 @@ burn [dinov2](https://arxiv.org/abs/2304.07193) model, view the [live demo](http
 ## setup
 - download pre-trained model (ViT-S|B, /wo registers) from [here](https://github.com/facebookresearch/dinov2?tab=readme-ov-file#pretrained-models)
 - place in `./assets/models`
-- run import tool `cargo run --bin import`
+- run import tool `cargo run --features import --bin import`
 
 <!---
 TODO: release converted/quantized mpk models /w net loader
@@ -47,5 +47,5 @@ TODO: release converted/quantized mpk models /w net loader
 
 ## benchmarks
 
-- `cargo bench`
+- `cargo bench --bench dinov2 --features backend_wgpu`
 - open `target/criterion/report/index.html`

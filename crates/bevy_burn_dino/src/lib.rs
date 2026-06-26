@@ -67,9 +67,9 @@ pub async fn process_frame<B: Backend>(
         model.forward(input_tensor.clone(), None).x_norm_patchtokens
     };
 
-    let batch = dino_features.shape().dims[0];
-    let elements = dino_features.shape().dims[1];
-    let embedding_dim = dino_features.shape().dims[2];
+    let batch = dino_features.dims()[0];
+    let elements = dino_features.dims()[1];
+    let embedding_dim = dino_features.dims()[2];
     let n_samples = batch * elements;
     let spatial_size = elements.isqrt();
 
@@ -95,6 +95,7 @@ pub async fn process_frame<B: Backend>(
         output_size: Some([dino_config.image_size, dino_config.image_size]),
         scale_factor: None,
         mode: InterpolateMode::Linear,
+        align_corners: true,
     }
     .init();
     let pca_features = upsample.forward(pca_features).permute([0, 2, 3, 1]);

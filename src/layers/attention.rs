@@ -109,7 +109,7 @@ impl<B: Backend> Attention<B> {
         pos: Option<&Tensor<B, 3>>,
         attn_mask: Option<&Tensor<B, 4>>,
     ) -> Tensor<B, 3> {
-        let [B, N, C] = x.shape().dims();
+        let [B, N, C] = x.dims();
 
         let qkv = self
             .qkv

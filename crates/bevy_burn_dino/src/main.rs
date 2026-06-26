@@ -23,6 +23,7 @@ use bevy::{
 use bevy_args::{parse_args, Deserialize, Parser, Serialize, ValueEnum};
 use bevy_burn::{BevyBurnBridgePlugin, BevyBurnHandle, BindingDirection, BurnDevice, TransferKind};
 use burn::prelude::*;
+use burn::tensor::Device as BackendDevice;
 use burn_wgpu::Wgpu;
 
 use burn_dino::model::{
@@ -80,6 +81,11 @@ impl Default for BevyBurnDinoConfig {
 #[cfg(feature = "native")]
 mod io {
     use super::PcaType;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+    };
+
     use burn::{
         prelude::*,
         record::{FullPrecisionSettings, NamedMpkBytesRecorder, Recorder},
@@ -89,17 +95,32 @@ mod io {
         pca::{PcaTransform, PcaTransformConfig},
     };
 
-    static DINO_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/dinov2.mpk");
-    static FACE_PCA_STATE_ENCODED: &[u8] = include_bytes!("../../../assets/models/face_pca.mpk");
-    static PERSON_PCA_STATE_ENCODED: &[u8] =
-        include_bytes!("../../../assets/models/person_pca.mpk");
+    fn load_model_bytes(file_name: &str) -> Vec<u8> {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let candidates = [
+            PathBuf::from("assets/models").join(file_name),
+            PathBuf::from("crates/bevy_burn_dino/assets/models").join(file_name),
+            manifest_dir.join("assets/models").join(file_name),
+        ];
+
+        for path in &candidates {
+            if let Ok(bytes) = fs::read(path) {
+                return bytes;
+            }
+        }
+
+        panic!(
+            "failed to read model asset `{}` from assets/models; run the import tool or place the .mpk file there",
+            file_name
+        );
+    }
 
     pub async fn load_model<B: Backend>(
         config: &DinoVisionTransformerConfig,
         device: &B::Device,
     ) -> DinoVisionTransformer<B> {
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(DINO_STATE_ENCODED.to_vec(), device)
+            .load(load_model_bytes("dinov2.mpk"), device)
             .expect("failed to decode state");
 
         let model = config.init(device);
@@ -113,12 +134,12 @@ mod io {
     ) -> PcaTransform<B> {
         let data = match pca_type {
             PcaType::Adaptive => unimplemented!(),
-            PcaType::Face => FACE_PCA_STATE_ENCODED,
-            PcaType::Person => PERSON_PCA_STATE_ENCODED,
+            PcaType::Face => load_model_bytes("face_pca.mpk"),
+            PcaType::Person => load_model_bytes("person_pca.mpk"),
         };
 
         let record = NamedMpkBytesRecorder::<FullPrecisionSettings>::default()
-            .load(data.to_vec(), device)
+            .load(data, device)
             .expect("failed to decode state");
 
         let model = config.init(device);
@@ -234,7 +255,7 @@ struct ModelLoadTask(Task<LoadedModels>);
 
 struct LoadedModels {
     config: DinoVisionTransformerConfig,
-    device: <Wgpu as Backend>::Device,
+    device: BackendDevice<Wgpu>,
     dino: Arc<Mutex<DinoVisionTransformer<Wgpu>>>,
     pca: Arc<Mutex<PcaTransform<Wgpu>>>,
 }
@@ -443,11 +464,11 @@ pub fn viewer_app(args: BevyBurnDinoConfig) -> App {
     let default_plugins = DefaultPlugins
         .set(ImagePlugin::default_nearest())
         .set(RenderPlugin {
-            render_creation: RenderCreation::Automatic(WgpuSettings {
+            render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
                 // Request only cross-adapter-safe features. Some drivers do not expose SHADER_F16.
                 features: WgpuFeatures::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
                 ..Default::default()
-            }),
+            })),
             ..Default::default()
         })
         .set(WindowPlugin {
@@ -492,8 +513,8 @@ fn fps_display_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         .spawn((
             Text("fps: ".to_string()),
             TextFont {
-                font: asset_server.load("fonts/Caveat-Bold.ttf"),
-                font_size: 60.0,
+                font: asset_server.load("fonts/Caveat-Bold.ttf").into(),
+                font_size: 60.0.into(),
                 ..Default::default()
             },
             TextColor(Color::WHITE),
@@ -509,8 +530,8 @@ fn fps_display_setup(mut commands: Commands, asset_server: Res<AssetServer>) {
             FpsText,
             TextColor(Color::Srgba(GOLD)),
             TextFont {
-                font: asset_server.load("fonts/Caveat-Bold.ttf"),
-                font_size: 60.0,
+                font: asset_server.load("fonts/Caveat-Bold.ttf").into(),
+                font_size: 60.0.into(),
                 ..Default::default()
             },
             TextSpan::default(),
